@@ -1,0 +1,11 @@
+[package]
+name = "uci"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "turbo9000"
+path = "src/main.rs"
+
+[dependencies]
+engine = { path = "../engine" }
