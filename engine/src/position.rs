@@ -12,25 +12,28 @@ pub const EMPTY: BitBoard = 0;
 /// Denote 64 as no en-passant
 pub const NO_EN_PASSANT: Square = 64;
 
+/// White is `false` and Black is `true`, so a color indexes the color-indexed
+/// boards directly and flipping is a negation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
-pub enum Color {
-    White = 0,
-    Black = 1,
-}
+pub struct Color(bool);
 
 impl Color {
+    pub const WHITE: Self = Self(false);
+    pub const BLACK: Self = Self(true);
+
     pub const COUNT: usize = 2;
+    pub const ALL: [Self; Self::COUNT] = [Self::WHITE, Self::BLACK];
 
     pub const fn index(self) -> usize {
-        self as usize
+        self.0 as usize
     }
 
     pub const fn flip(self) -> Color {
-        match self {
-            Color::White => Color::Black,
-            Color::Black => Color::White,
-        }
+        Self(!self.0)
+    }
+
+    pub const fn is_white(self) -> bool {
+        !self.0
     }
 }
 
@@ -126,10 +129,7 @@ impl ColoredPiece {
     }
 
     pub const fn color(self) -> Color {
-        match self as u8 & 1 {
-            0 => Color::White,
-            _ => Color::Black,
-        }
+        Color(self as u8 & 1 != 0)
     }
 }
 
@@ -162,6 +162,7 @@ pub const fn square(file: u8, rank: u8) -> Square {
 }
 
 pub const fn bit(square: Square) -> BitBoard {
+    debug_assert!(square < 64, "no bit for a square off the board");
     1u64 << square
 }
 
@@ -190,10 +191,7 @@ const CASTLE_MASK: [u8; 64] = {
 
 /// Where the pawn taken by an en passant capture actually stands.
 const fn en_passant_victim(to: Square, capturing: Color) -> Square {
-    match capturing {
-        Color::White => to - 8,
-        Color::Black => to + 8,
-    }
+    if capturing.is_white() { to - 8 } else { to + 8 }
 }
 
 /// Rook travel for a castle, given the king's origin.
@@ -241,7 +239,7 @@ impl Position {
             colors: [EMPTY; Color::COUNT],
             occupied: EMPTY,
             mailbox: [None; 64],
-            side_to_move: Color::White,
+            side_to_move: Color::WHITE,
             castling: CastlingRights::NONE,
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
@@ -281,7 +279,7 @@ impl Position {
             colors: [white, black],
             occupied: white | black,
             mailbox: [None; 64],
-            side_to_move: Color::White,
+            side_to_move: Color::WHITE,
             castling: CastlingRights::ALL,
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
@@ -294,7 +292,7 @@ impl Position {
     pub fn rebuild_mailbox(&mut self) {
         self.mailbox = [None; 64];
         for (color_index, boards) in self.pieces.iter().enumerate() {
-            let color = if color_index == 0 { Color::White } else { Color::Black };
+            let color = Color::ALL[color_index];
             for (piece_index, &board) in boards.iter().enumerate() {
                 let piece = ColoredPiece::PIECE_OF[piece_index * 2];
                 let mut board = board;
@@ -312,8 +310,8 @@ impl Position {
     }
 
     pub const fn pieces_of_kind(&self, piece: Piece) -> BitBoard {
-        self.pieces[Color::White.index()][piece.index()]
-            | self.pieces[Color::Black.index()][piece.index()]
+        self.pieces[Color::WHITE.index()][piece.index()]
+            | self.pieces[Color::BLACK.index()][piece.index()]
     }
 
     pub const fn color(&self, color: Color) -> BitBoard {
@@ -392,7 +390,8 @@ impl Position {
 
     /// Clamped, since a FEN may carry any number but the rule caps at 100.
     pub fn set_halfmove_clock(&mut self, clock: u32) {
-        self.halfmove_clock = clock.min(u8::MAX as u32) as u8;
+        debug_assert!(clock <= 100, "halfmove clock beyond the fifty move rule");
+        self.halfmove_clock = clock.min(100) as u8;
     }
 
     /// The one place state is captured, so unmake cannot miss a field.
@@ -470,17 +469,14 @@ impl Position {
             self.remove_piece(victim, captured.piece(), them);
         }
 
-        match mv.promoted_piece() {
-            Some(promoted) => {
-                self.remove_piece(from, Piece::Pawn, us);
-                self.put_piece(to, promoted, us);
-            }
-            None => {
-                self.move_piece(from, to, moving, us);
-                if mv.is_castle() {
-                    let (rook_from, rook_to) = castle_rook(from, mv.is_king_castle());
-                    self.move_piece(rook_from, rook_to, Piece::Rook, us);
-                }
+        if mv.is_promotion() {
+            self.remove_piece(from, Piece::Pawn, us);
+            self.put_piece(to, mv.promoted_piece(), us);
+        } else {
+            self.move_piece(from, to, moving, us);
+            if mv.is_castle() {
+                let (rook_from, rook_to) = castle_rook(from, mv.is_king_castle());
+                self.move_piece(rook_from, rook_to, Piece::Rook, us);
             }
         }
 
@@ -508,20 +504,17 @@ impl Position {
         let from = mv.from();
         let to = mv.to();
 
-        match mv.promoted_piece() {
-            Some(promoted) => {
-                self.remove_piece(to, promoted, us);
-                self.put_piece(from, Piece::Pawn, us);
-            }
-            None => {
-                let moving = self.mailbox[to as usize]
-                    .expect("no piece on the destination square")
-                    .piece();
-                self.move_piece(to, from, moving, us);
-                if mv.is_castle() {
-                    let (rook_from, rook_to) = castle_rook(from, mv.is_king_castle());
-                    self.move_piece(rook_to, rook_from, Piece::Rook, us);
-                }
+        if mv.is_promotion() {
+            self.remove_piece(to, mv.promoted_piece(), us);
+            self.put_piece(from, Piece::Pawn, us);
+        } else {
+            let moving = self.mailbox[to as usize]
+                .expect("no piece on the destination square")
+                .piece();
+            self.move_piece(to, from, moving, us);
+            if mv.is_castle() {
+                let (rook_from, rook_to) = castle_rook(from, mv.is_king_castle());
+                self.move_piece(rook_to, rook_from, Piece::Rook, us);
             }
         }
 
@@ -550,10 +543,10 @@ impl fmt::Display for Position {
             write!(f, "{} ", rank + 1)?;
             for file in 0..8 {
                 let symbol = match self.piece_at(square(file, rank)) {
-                    Some(colored) => match colored.color() {
-                        Color::White => colored.piece().to_char().to_ascii_uppercase(),
-                        Color::Black => colored.piece().to_char(),
-                    },
+                    Some(colored) if colored.color().is_white() => {
+                        colored.piece().to_char().to_ascii_uppercase()
+                    }
+                    Some(colored) => colored.piece().to_char(),
                     None => '.',
                 };
                 write!(f, "{symbol} ")?;

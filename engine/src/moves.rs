@@ -1,136 +1,93 @@
 use std::fmt;
+use std::mem;
 
 use crate::position::{file_of, rank_of, Piece, Square};
 
-/// Bit 3 marks a promotion, bit 2 a capture, so the two tests are single masks.
+/// Bit 3 marks a promotion, bit 2 a capture and low two
+/// bits decide the promotion piece.
 #[repr(u16)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MoveFlags {
     Quiet = 0b0000,
     DoublePush = 0b0001,
+
     KingCastle = 0b0010,
     QueenCastle = 0b0011,
+
     Capture = 0b0100,
     EnPassant = 0b0101,
+
+    /// Keeps `flags()` a total transmute.
+    Unused0110 = 0b0110,
+    Unused0111 = 0b0111,
+
     PromoKnight = 0b1000,
     PromoBishop = 0b1001,
     PromoRook = 0b1010,
     PromoQueen = 0b1011,
+
     PromoCaptureKnight = 0b1100,
     PromoCaptureBishop = 0b1101,
     PromoCaptureRook = 0b1110,
     PromoCaptureQueen = 0b1111,
 }
 
+/// Moves are stored in u16:
 /// `from` in bits 0..6, `to` in bits 6..12, flags in bits 12..16.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Move(u16);
 
 impl Move {
-    const fn new(from: Square, to: Square, flags: MoveFlags) -> Self {
+    pub const fn new(from: Square, to: Square, flags: MoveFlags) -> Self {
+        debug_assert!(from < 64 && to < 64);
         Self(from as u16 | (to as u16) << 6 | (flags as u16) << 12)
     }
 
-    pub const fn quiet(from: Square, to: Square) -> Self {
-        Self::new(from, to, MoveFlags::Quiet)
-    }
-
-    pub const fn capture(from: Square, to: Square) -> Self {
-        Self::new(from, to, MoveFlags::Capture)
-    }
-
-    pub const fn double_push(from: Square, to: Square) -> Self {
-        Self::new(from, to, MoveFlags::DoublePush)
-    }
-
-    pub const fn en_passant(from: Square, to: Square) -> Self {
-        Self::new(from, to, MoveFlags::EnPassant)
-    }
-
-    pub const fn king_castle(from: Square, to: Square) -> Self {
-        Self::new(from, to, MoveFlags::KingCastle)
-    }
-
-    pub const fn queen_castle(from: Square, to: Square) -> Self {
-        Self::new(from, to, MoveFlags::QueenCastle)
-    }
-
-    pub const fn promotion(from: Square, to: Square, piece: Piece, capture: bool) -> Self {
-        debug_assert!(piece.index() >= 1 && piece.index() <= 4);
-        let mut flags = MoveFlags::PromoKnight as u16 | (piece.index() as u16 - 1);
-        if capture {
-            flags |= MoveFlags::Capture as u16;
-        }
-        Self(from as u16 | (to as u16) << 6 | flags << 12)
-    }
-
     pub const fn from(self) -> Square {
-        (self.0 & 0x3f) as Square
+        (self.0 & 0b0011_1111) as Square
     }
 
     pub const fn to(self) -> Square {
-        (self.0 >> 6 & 0x3f) as Square
+        (self.0 >> 6 & 0b0011_1111) as Square
     }
 
     pub const fn flags(self) -> MoveFlags {
-        match self.0 >> 12 {
-            0b0000 => MoveFlags::Quiet,
-            0b0001 => MoveFlags::DoublePush,
-            0b0010 => MoveFlags::KingCastle,
-            0b0011 => MoveFlags::QueenCastle,
-            0b0100 => MoveFlags::Capture,
-            0b0101 => MoveFlags::EnPassant,
-            0b1000 => MoveFlags::PromoKnight,
-            0b1001 => MoveFlags::PromoBishop,
-            0b1010 => MoveFlags::PromoRook,
-            0b1011 => MoveFlags::PromoQueen,
-            0b1100 => MoveFlags::PromoCaptureKnight,
-            0b1101 => MoveFlags::PromoCaptureBishop,
-            0b1110 => MoveFlags::PromoCaptureRook,
-            0b1111 => MoveFlags::PromoCaptureQueen,
-            _ => panic!("invalid move flags"),
-        }
+        unsafe { mem::transmute(self.0 >> 12) }
     }
 
     pub const fn is_capture(self) -> bool {
-        matches!(
-            self.flags(),
-            MoveFlags::Capture
-                | MoveFlags::PromoCaptureKnight
-                | MoveFlags::PromoCaptureBishop
-                | MoveFlags::PromoCaptureRook
-                | MoveFlags::PromoCaptureQueen
-        )
+        self.0 & (MoveFlags::Capture as u16) << 12 > 0
+    }
+
+    pub const fn is_promotion(self) -> bool {
+        self.0 & (MoveFlags::PromoKnight as u16) << 12 > 0
     }
 
     pub const fn is_en_passant(self) -> bool {
-        matches!(self.flags(), MoveFlags::EnPassant)
+        self.0 >> 12 == MoveFlags::EnPassant as u16
     }
 
     pub const fn is_double_push(self) -> bool {
-        matches!(self.flags(), MoveFlags::DoublePush)
+        self.0 >> 12 == MoveFlags::DoublePush as u16
     }
 
     pub const fn is_king_castle(self) -> bool {
-        matches!(self.flags(), MoveFlags::KingCastle)
+        self.0 >> 12 == MoveFlags::KingCastle as u16
     }
 
     pub const fn is_queen_castle(self) -> bool {
-        matches!(self.flags(), MoveFlags::QueenCastle)
+        self.0 >> 12 == MoveFlags::QueenCastle as u16
     }
 
     pub const fn is_castle(self) -> bool {
         self.is_king_castle() || self.is_queen_castle()
     }
 
-    pub const fn promoted_piece(self) -> Option<Piece> {
-        match self.flags() {
-            MoveFlags::PromoKnight | MoveFlags::PromoCaptureKnight => Some(Piece::Knight),
-            MoveFlags::PromoBishop | MoveFlags::PromoCaptureBishop => Some(Piece::Bishop),
-            MoveFlags::PromoRook | MoveFlags::PromoCaptureRook => Some(Piece::Rook),
-            MoveFlags::PromoQueen | MoveFlags::PromoCaptureQueen => Some(Piece::Queen),
-            _ => None,
-        }
+    /// The move must be a promotion.
+    pub const fn promoted_piece(self) -> Piece {
+        const PIECES: [Piece; 4] = [Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen];
+        debug_assert!(self.is_promotion());
+        PIECES[(self.0 >> 12 & 0b11) as usize]
     }
 }
 
@@ -141,10 +98,10 @@ impl fmt::Display for Move {
         let [from_file, from_rank] = square(self.from());
         let [to_file, to_rank] = square(self.to());
         write!(f, "{from_file}{from_rank}{to_file}{to_rank}")?;
-        match self.promoted_piece() {
-            Some(piece) => write!(f, "{}", piece.to_char()),
-            None => Ok(()),
+        if self.is_promotion() {
+            write!(f, "{}", self.promoted_piece().to_char())?;
         }
+        Ok(())
     }
 }
 
