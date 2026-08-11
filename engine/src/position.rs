@@ -226,7 +226,7 @@ const fn castle_rook(from: Square, king_side: bool) -> (Square, Square) {
 ///
 /// Position holds enough information to construct a FEN.
 /// In make_move() we return a `Undo` for the caller to keep until it unmakes,
-/// this simplifies irreverisble moves.
+/// this simplifies irreversible moves.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Position {
     pieces: [[BitBoard; Piece::COUNT]; Color::COUNT],
