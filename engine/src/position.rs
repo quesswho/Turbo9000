@@ -22,12 +22,10 @@ pub enum Color {
 impl Color {
     pub const COUNT: usize = 2;
 
-    #[inline]
     pub const fn index(self) -> usize {
         self as usize
     }
 
-    #[inline]
     pub const fn flip(self) -> Color {
         match self {
             Color::White => Color::Black,
@@ -50,7 +48,6 @@ pub enum Piece {
 impl Piece {
     pub const COUNT: usize = 6;
 
-    #[inline]
     pub const fn index(self) -> usize {
         self as usize
     }
@@ -120,17 +117,14 @@ impl ColoredPiece {
         Piece::King,
     ];
 
-    #[inline]
     pub const fn new(piece: Piece, color: Color) -> Self {
         Self::BY_COLOR_PIECE[color.index()][piece.index()]
     }
 
-    #[inline]
     pub const fn piece(self) -> Piece {
         Self::PIECE_OF[self as usize]
     }
 
-    #[inline]
     pub const fn color(self) -> Color {
         match self as u8 & 1 {
             0 => Color::White,
@@ -150,38 +144,31 @@ impl CastlingRights {
     pub const BLACK_QUEEN_SIDE: Self = Self(0b1000);
     pub const ALL: Self = Self(0b1111);
 
-    #[inline]
     pub const fn contains(self, rights: Self) -> bool {
         self.0 & rights.0 == rights.0
     }
 
-    #[inline]
     pub fn add(&mut self, rights: Self) {
         self.0 |= rights.0;
     }
 
-    #[inline]
     pub fn remove(&mut self, rights: Self) {
         self.0 &= !rights.0;
     }
 }
 
-#[inline]
 pub const fn square(file: u8, rank: u8) -> Square {
     rank * 8 + file
 }
 
-#[inline]
 pub const fn bit(square: Square) -> BitBoard {
     1u64 << square
 }
 
-#[inline]
 pub const fn file_of(square: Square) -> u8 {
     square % 8
 }
 
-#[inline]
 pub const fn rank_of(square: Square) -> u8 {
     square / 8
 }
@@ -202,7 +189,6 @@ const CASTLE_MASK: [u8; 64] = {
 };
 
 /// Where the pawn taken by an en passant capture actually stands.
-#[inline]
 const fn en_passant_victim(to: Square, capturing: Color) -> Square {
     match capturing {
         Color::White => to - 8,
@@ -211,7 +197,6 @@ const fn en_passant_victim(to: Square, capturing: Color) -> Square {
 }
 
 /// Rook travel for a castle, given the king's origin.
-#[inline]
 const fn castle_rook(from: Square, king_side: bool) -> (Square, Square) {
     let rank = rank_of(from);
     if king_side {
@@ -322,117 +307,95 @@ impl Position {
         }
     }
 
-    #[inline]
     pub const fn pieces(&self, piece: Piece, color: Color) -> BitBoard {
         self.pieces[color.index()][piece.index()]
     }
 
-    #[inline]
     pub const fn pieces_of_kind(&self, piece: Piece) -> BitBoard {
         self.pieces[Color::White.index()][piece.index()]
             | self.pieces[Color::Black.index()][piece.index()]
     }
 
-    #[inline]
     pub const fn color(&self, color: Color) -> BitBoard {
         self.colors[color.index()]
     }
 
-    #[inline]
     pub const fn occupied(&self) -> BitBoard {
         self.occupied
     }
 
-    #[inline]
     pub const fn empty_squares(&self) -> BitBoard {
         !self.occupied
     }
 
-    #[inline]
     pub const fn piece_at(&self, square: Square) -> Option<ColoredPiece> {
         self.mailbox[square as usize]
     }
 
-    #[inline]
     pub const fn pawns(&self, color: Color) -> BitBoard {
         self.pieces(Piece::Pawn, color)
     }
 
-    #[inline]
     pub const fn knights(&self, color: Color) -> BitBoard {
         self.pieces(Piece::Knight, color)
     }
 
-    #[inline]
     pub const fn bishops(&self, color: Color) -> BitBoard {
         self.pieces(Piece::Bishop, color)
     }
 
-    #[inline]
     pub const fn rooks(&self, color: Color) -> BitBoard {
         self.pieces(Piece::Rook, color)
     }
 
-    #[inline]
     pub const fn queens(&self, color: Color) -> BitBoard {
         self.pieces(Piece::Queen, color)
     }
 
-    #[inline]
     pub const fn king(&self, color: Color) -> BitBoard {
         self.pieces(Piece::King, color)
     }
 
-    #[inline]
     pub const fn king_square(&self, color: Color) -> Square {
         self.king(color).trailing_zeros() as Square
     }
 
-    #[inline]
     pub const fn side_to_move(&self) -> Color {
         self.side_to_move
     }
 
-    #[inline]
     pub fn set_side_to_move(&mut self, color: Color) {
         self.side_to_move = color;
     }
 
-    #[inline]
     pub const fn castling(&self) -> CastlingRights {
         self.castling
     }
 
-    #[inline]
     pub fn castling_mut(&mut self) -> &mut CastlingRights {
         &mut self.castling
     }
 
     /// [`NO_EN_PASSANT`] unless the previous move was a double push.
-    #[inline]
     pub const fn en_passant(&self) -> Square {
         self.en_passant
     }
 
-    #[inline]
     pub fn set_en_passant(&mut self, square: Square) {
         debug_assert!(square <= NO_EN_PASSANT);
         self.en_passant = square;
     }
 
-    #[inline]
     pub const fn halfmove_clock(&self) -> u8 {
         self.halfmove_clock
     }
 
     /// Clamped, since a FEN may carry any number but the rule caps at 100.
-    #[inline]
     pub fn set_halfmove_clock(&mut self, clock: u32) {
         self.halfmove_clock = clock.min(u8::MAX as u32) as u8;
     }
 
     /// The one place state is captured, so unmake cannot miss a field.
-    #[inline]
     pub const fn undo(&self, captured: Option<ColoredPiece>) -> Undo {
         Undo {
             captured,
@@ -443,7 +406,6 @@ impl Position {
     }
 
     /// The one place it is put back. Restores state only, not the boards.
-    #[inline]
     pub fn restore(&mut self, undo: Undo) {
         self.castling = undo.castling;
         self.en_passant = undo.en_passant;
@@ -451,7 +413,6 @@ impl Position {
     }
 
     /// The square must be empty.
-    #[inline]
     pub fn put_piece(&mut self, square: Square, piece: Piece, color: Color) {
         debug_assert!(self.occupied & bit(square) == EMPTY);
         let mask = bit(square);
@@ -462,7 +423,6 @@ impl Position {
     }
 
     /// The piece and color must match what stands on the square.
-    #[inline]
     pub fn remove_piece(&mut self, square: Square, piece: Piece, color: Color) {
         debug_assert!(self.piece_at(square) == Some(ColoredPiece::new(piece, color)));
         let mask = !bit(square);
@@ -472,7 +432,6 @@ impl Position {
         self.mailbox[square as usize] = None;
     }
 
-    #[inline]
     pub fn move_piece(&mut self, from: Square, to: Square, piece: Piece, color: Color) {
         debug_assert!(self.piece_at(from) == Some(ColoredPiece::new(piece, color)));
         debug_assert!(self.occupied & bit(to) == EMPTY);

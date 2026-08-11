@@ -19,94 +19,76 @@ const PROMO_BIT: u16 = 0b1000;
 pub struct Move(u16);
 
 impl Move {
-    #[inline]
     const fn new(from: Square, to: Square, flags: u16) -> Self {
         Self(from as u16 | (to as u16) << 6 | flags << 12)
     }
 
-    #[inline]
     pub const fn quiet(from: Square, to: Square) -> Self {
         Self::new(from, to, QUIET)
     }
 
-    #[inline]
     pub const fn capture(from: Square, to: Square) -> Self {
         Self::new(from, to, CAPTURE)
     }
 
-    #[inline]
     pub const fn double_push(from: Square, to: Square) -> Self {
         Self::new(from, to, DOUBLE_PUSH)
     }
 
-    #[inline]
     pub const fn en_passant(from: Square, to: Square) -> Self {
         Self::new(from, to, EN_PASSANT)
     }
 
-    #[inline]
     pub const fn king_castle(from: Square, to: Square) -> Self {
         Self::new(from, to, KING_CASTLE)
     }
 
-    #[inline]
     pub const fn queen_castle(from: Square, to: Square) -> Self {
         Self::new(from, to, QUEEN_CASTLE)
     }
 
-    #[inline]
     pub const fn promotion(from: Square, to: Square, piece: Piece, capture: bool) -> Self {
         debug_assert!(piece.index() >= 1 && piece.index() <= 4);
         let flags = PROMO | (piece.index() as u16 - 1) | if capture { CAPTURE_BIT } else { 0 };
         Self::new(from, to, flags)
     }
 
-    #[inline]
     pub const fn from(self) -> Square {
         (self.0 & 0x3f) as Square
     }
 
-    #[inline]
     pub const fn to(self) -> Square {
         (self.0 >> 6 & 0x3f) as Square
     }
 
-    #[inline]
     const fn flags(self) -> u16 {
         self.0 >> 12
     }
 
-    #[inline]
     pub const fn is_capture(self) -> bool {
         self.flags() & CAPTURE_BIT != 0
     }
 
-    #[inline]
     pub const fn is_en_passant(self) -> bool {
         self.flags() == EN_PASSANT
     }
 
-    #[inline]
     pub const fn is_double_push(self) -> bool {
         self.flags() == DOUBLE_PUSH
     }
 
-    #[inline]
     pub const fn is_king_castle(self) -> bool {
         self.flags() == KING_CASTLE
     }
 
-    #[inline]
     pub const fn is_queen_castle(self) -> bool {
         self.flags() == QUEEN_CASTLE
     }
 
-    #[inline]
     pub const fn is_castle(self) -> bool {
         self.is_king_castle() || self.is_queen_castle()
     }
 
-    #[inline]
     pub const fn promoted_piece(self) -> Option<Piece> {
         if self.flags() & PROMO_BIT == 0 {
             return None;
