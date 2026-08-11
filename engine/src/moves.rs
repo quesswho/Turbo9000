@@ -3,54 +3,63 @@ use std::fmt;
 use crate::position::{Piece, Square, file_of, rank_of};
 
 /// Bit 3 marks a promotion, bit 2 a capture, so the two tests are single masks.
-const QUIET: u16 = 0b0000;
-const DOUBLE_PUSH: u16 = 0b0001;
-const KING_CASTLE: u16 = 0b0010;
-const QUEEN_CASTLE: u16 = 0b0011;
-const CAPTURE: u16 = 0b0100;
-const EN_PASSANT: u16 = 0b0101;
-const PROMO: u16 = 0b1000;
+#[repr(u16)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum MoveFlags {
+    Quiet = 0b0000,
+    DoublePush = 0b0001,
+    KingCastle = 0b0010,
+    QueenCastle = 0b0011,
+    Capture = 0b0100,
+    EnPassant = 0b0101,
+    Promotion = 0b1000,
+}
 
-const CAPTURE_BIT: u16 = 0b0100;
-const PROMO_BIT: u16 = 0b1000;
+impl MoveFlags {
+    const CAPTURE_BIT: u16 = 0b0100;
+    const PROMO_BIT: u16 = 0b1000;
+}
 
 /// `from` in bits 0..6, `to` in bits 6..12, flags in bits 12..16.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Move(u16);
 
 impl Move {
-    const fn new(from: Square, to: Square, flags: u16) -> Self {
-        Self(from as u16 | (to as u16) << 6 | flags << 12)
+    const fn new(from: Square, to: Square, flags: MoveFlags) -> Self {
+        Self(from as u16 | (to as u16) << 6 | (flags as u16) << 12)
     }
 
     pub const fn quiet(from: Square, to: Square) -> Self {
-        Self::new(from, to, QUIET)
+        Self::new(from, to, MoveFlags::Quiet)
     }
 
     pub const fn capture(from: Square, to: Square) -> Self {
-        Self::new(from, to, CAPTURE)
+        Self::new(from, to, MoveFlags::Capture)
     }
 
     pub const fn double_push(from: Square, to: Square) -> Self {
-        Self::new(from, to, DOUBLE_PUSH)
+        Self::new(from, to, MoveFlags::DoublePush)
     }
 
     pub const fn en_passant(from: Square, to: Square) -> Self {
-        Self::new(from, to, EN_PASSANT)
+        Self::new(from, to, MoveFlags::EnPassant)
     }
 
     pub const fn king_castle(from: Square, to: Square) -> Self {
-        Self::new(from, to, KING_CASTLE)
+        Self::new(from, to, MoveFlags::KingCastle)
     }
 
     pub const fn queen_castle(from: Square, to: Square) -> Self {
-        Self::new(from, to, QUEEN_CASTLE)
+        Self::new(from, to, MoveFlags::QueenCastle)
     }
 
     pub const fn promotion(from: Square, to: Square, piece: Piece, capture: bool) -> Self {
         debug_assert!(piece.index() >= 1 && piece.index() <= 4);
-        let flags = PROMO | (piece.index() as u16 - 1) | if capture { CAPTURE_BIT } else { 0 };
-        Self::new(from, to, flags)
+        let mut flags = MoveFlags::Promotion as u16 | (piece.index() as u16 - 1);
+        if capture {
+            flags |= MoveFlags::CAPTURE_BIT;
+        }
+        Self(from as u16 | (to as u16) << 6 | flags << 12)
     }
 
     pub const fn from(self) -> Square {
@@ -66,23 +75,23 @@ impl Move {
     }
 
     pub const fn is_capture(self) -> bool {
-        self.flags() & CAPTURE_BIT != 0
+        self.flags() & MoveFlags::CAPTURE_BIT != 0
     }
 
     pub const fn is_en_passant(self) -> bool {
-        self.flags() == EN_PASSANT
+        self.flags() == MoveFlags::EnPassant as u16
     }
 
     pub const fn is_double_push(self) -> bool {
-        self.flags() == DOUBLE_PUSH
+        self.flags() == MoveFlags::DoublePush as u16
     }
 
     pub const fn is_king_castle(self) -> bool {
-        self.flags() == KING_CASTLE
+        self.flags() == MoveFlags::KingCastle as u16
     }
 
     pub const fn is_queen_castle(self) -> bool {
-        self.flags() == QUEEN_CASTLE
+        self.flags() == MoveFlags::QueenCastle as u16
     }
 
     pub const fn is_castle(self) -> bool {
@@ -90,7 +99,7 @@ impl Move {
     }
 
     pub const fn promoted_piece(self) -> Option<Piece> {
-        if self.flags() & PROMO_BIT == 0 {
+        if self.flags() & MoveFlags::PROMO_BIT == 0 {
             return None;
         }
         Some(match self.flags() & 0b0011 {
