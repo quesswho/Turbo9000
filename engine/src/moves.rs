@@ -15,9 +15,6 @@ enum MoveFlags {
     Promotion = 0b1000,
 }
 
-const CAPTURE_BIT: u16 = 0b0100;
-const PROMO_BIT: u16 = 0b1000;
-
 /// `from` in bits 0..6, `to` in bits 6..12, flags in bits 12..16.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Move(u16);
@@ -55,7 +52,7 @@ impl Move {
         debug_assert!(piece.index() >= 1 && piece.index() <= 4);
         let mut flags = MoveFlags::Promotion as u16 | (piece.index() as u16 - 1);
         if capture {
-            flags |= CAPTURE_BIT;
+            flags |= MoveFlags::Capture as u16;
         }
         Self(from as u16 | (to as u16) << 6 | flags << 12)
     }
@@ -73,7 +70,7 @@ impl Move {
     }
 
     pub const fn is_capture(self) -> bool {
-        self.flags() & CAPTURE_BIT != 0
+        self.flags() & MoveFlags::Capture as u16 != 0
     }
 
     pub const fn is_en_passant(self) -> bool {
@@ -97,7 +94,7 @@ impl Move {
     }
 
     pub const fn promoted_piece(self) -> Option<Piece> {
-        if self.flags() & PROMO_BIT == 0 {
+        if self.flags() & MoveFlags::Promotion as u16 == 0 {
             return None;
         }
         Some(match self.flags() & 0b0011 {
