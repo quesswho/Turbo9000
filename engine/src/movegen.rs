@@ -1,3 +1,5 @@
+use crate::position::{BitBoard, Position, EMPTY};
+
 /// Stages of staged move generation, in the order of the search.
 /// Each stage is entered at most once, and only the `Generate*` stages
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -27,4 +29,30 @@ pub enum Stage {
     Evasion,
 
     Done,
+}
+
+pub const NO_CHECK: BitBoard = !EMPTY;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CheckMasks {
+    pub danger: BitBoard,
+    pub active: BitBoard,
+    pub rook_pin: BitBoard,
+    pub bishop_pin: BitBoard,
+    pub en_passant: BitBoard,
+    pub en_passant_check: BitBoard,
+}
+
+impl CheckMasks {
+    pub const fn in_check(&self) -> bool {
+        self.active != NO_CHECK
+    }
+
+    pub const fn double_check(&self) -> bool {
+        self.active == EMPTY
+    }
+}
+
+pub fn check_masks<const WHITE: bool>(_position: &Position) -> CheckMasks {
+    todo!("port TCheck")
 }
