@@ -1,3 +1,4 @@
+use crate::moves::Move;
 use crate::position::{BitBoard, Position, EMPTY};
 
 /// Stages of staged move generation, in the order of the search.
@@ -5,6 +6,10 @@ use crate::position::{BitBoard, Position, EMPTY};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stage {
     TtMove,
+
+    /// Gathers the [`CheckMasks`] the generators mask with, and decides
+    /// whether the evasion path replaces the noisy and quiet split.
+    Init,
 
     GenerateNoisy,
     /// Captures and promotions that do not lose material by static exchange.
@@ -55,4 +60,13 @@ impl CheckMasks {
 
 pub fn check_masks<const WHITE: bool>(_position: &Position) -> CheckMasks {
     todo!("port TCheck")
+}
+
+pub const MAX_MOVES: usize = 218;
+
+#[derive(Clone)]
+pub struct MoveList {
+    moves: [Move; MAX_MOVES],
+    scores: [i32; MAX_MOVES],
+    len: usize,
 }
