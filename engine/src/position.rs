@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str::FromStr;
 
 use crate::moves::Move;
 
@@ -69,6 +70,18 @@ impl Piece {
 
     pub const fn index(self) -> usize {
         self as usize
+    }
+
+    pub const fn from_char(c: char) -> Option<Self> {
+        match c {
+            'p' | 'P' => Some(Piece::Pawn),
+            'n' | 'N' => Some(Piece::Knight),
+            'b' | 'B' => Some(Piece::Bishop),
+            'r' | 'R' => Some(Piece::Rook),
+            'q' | 'Q' => Some(Piece::Queen),
+            'k' | 'K' => Some(Piece::King),
+            _ => None,
+        }
     }
 
     pub const fn to_char(self) -> char {
@@ -557,6 +570,58 @@ impl Position {
 impl Default for Position {
     fn default() -> Self {
         Self::starting()
+    }
+}
+
+impl FromStr for Position {
+    type Err = &'static str;
+
+    fn from_str(fen: &str) -> Result<Self, Self::Err> {
+        let mut fields = fen.split_whitespace();
+        let mut position = Self::empty();
+
+        let (mut file, mut rank) = (0, 7);
+        for c in fields.next().ok_or("missing piece placement")?.chars() {
+            match c {
+                '/' => (file, rank) = (0, rank - 1),
+                '1'..='8' => file += c as u8 - b'0',
+                _ => {
+                    let piece = Piece::from_char(c).ok_or("unknown piece")?;
+                    let color = if c.is_ascii_uppercase() {
+                        White::COLOR
+                    } else {
+                        Black::COLOR
+                    };
+                    position.put_piece(square(file, rank), piece, color);
+                    file += 1;
+                }
+            }
+        }
+
+        position.side_to_move = match fields.next().ok_or("missing side to move")? {
+            "w" => White::COLOR,
+            "b" => Black::COLOR,
+            _ => return Err("side to move is neither w nor b"),
+        };
+
+        for c in fields.next().ok_or("missing castling rights")?.chars() {
+            position.castling.add(match c {
+                'K' => CastlingRights::WHITE_KING_SIDE,
+                'Q' => CastlingRights::WHITE_QUEEN_SIDE,
+                'k' => CastlingRights::BLACK_KING_SIDE,
+                'q' => CastlingRights::BLACK_QUEEN_SIDE,
+                _ => continue,
+            });
+        }
+
+        position.en_passant = match fields.next().ok_or("missing en passant square")?.as_bytes() {
+            [file, rank] => square(file - b'a', rank - b'1'),
+            _ => NO_EN_PASSANT,
+        };
+
+        position.halfmove_clock = fields.next().and_then(|c| c.parse().ok()).unwrap_or(0);
+
+        Ok(position)
     }
 }
 
