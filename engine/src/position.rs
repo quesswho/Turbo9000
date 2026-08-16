@@ -18,11 +18,8 @@ pub const NO_EN_PASSANT: Square = 64;
 pub struct Color(bool);
 
 impl Color {
-    pub const WHITE: Self = Self(false);
-    pub const BLACK: Self = Self(true);
-
     pub const COUNT: usize = 2;
-    pub const ALL: [Self; Self::COUNT] = [Self::WHITE, Self::BLACK];
+    pub const ALL: [Self; Self::COUNT] = [White::COLOR, Black::COLOR];
 
     pub const fn index(self) -> usize {
         self.0 as usize
@@ -35,6 +32,25 @@ impl Color {
     pub const fn is_white(self) -> bool {
         !self.0
     }
+}
+
+/// Color as a type so that generic code gets resolved at compile time.
+pub trait Side {
+    const COLOR: Color;
+    type Them: Side<Them = Self>;
+}
+
+pub enum White {}
+pub enum Black {}
+
+impl Side for White {
+    const COLOR: Color = Color(false);
+    type Them = Black;
+}
+
+impl Side for Black {
+    const COLOR: Color = Color(true);
+    type Them = White;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -166,6 +182,14 @@ pub const fn bit(square: Square) -> BitBoard {
     1u64 << square
 }
 
+/// Takes the lowest square off the board and hands it back.
+pub const fn pop_square(board: &mut BitBoard) -> Square {
+    debug_assert!(*board != EMPTY, "no square to pop off an empty board");
+    let square = board.trailing_zeros() as Square;
+    *board &= *board - 1;
+    square
+}
+
 pub const fn file_of(square: Square) -> u8 {
     square % 8
 }
@@ -239,7 +263,7 @@ impl Position {
             colors: [EMPTY; Color::COUNT],
             occupied: EMPTY,
             mailbox: [None; 64],
-            side_to_move: Color::WHITE,
+            side_to_move: White::COLOR,
             castling: CastlingRights::NONE,
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
@@ -279,7 +303,7 @@ impl Position {
             colors: [white, black],
             occupied: white | black,
             mailbox: [None; 64],
-            side_to_move: Color::WHITE,
+            side_to_move: White::COLOR,
             castling: CastlingRights::ALL,
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
@@ -297,8 +321,7 @@ impl Position {
                 let piece = ColoredPiece::PIECE_OF[piece_index * 2];
                 let mut board = board;
                 while board != EMPTY {
-                    let square = board.trailing_zeros() as usize;
-                    board &= board - 1;
+                    let square = pop_square(&mut board) as usize;
                     self.mailbox[square] = Some(ColoredPiece::new(piece, color));
                 }
             }
@@ -310,8 +333,8 @@ impl Position {
     }
 
     pub const fn pieces_of_kind(&self, piece: Piece) -> BitBoard {
-        self.pieces[Color::WHITE.index()][piece.index()]
-            | self.pieces[Color::BLACK.index()][piece.index()]
+        self.pieces[White::COLOR.index()][piece.index()]
+            | self.pieces[Black::COLOR.index()][piece.index()]
     }
 
     pub const fn color(&self, color: Color) -> BitBoard {
