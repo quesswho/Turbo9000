@@ -1,6 +1,7 @@
 pub mod lookup;
 pub mod movegen;
 pub mod moves;
+pub mod perft;
 pub mod position;
 
 pub const NAME: &str = "Turbo9000";

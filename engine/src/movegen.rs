@@ -1,5 +1,5 @@
 use crate::lookup;
-use crate::moves::Move;
+use crate::moves::{Move, MoveFlags};
 use crate::position::{bit, pop_square, BitBoard, Position, Side, EMPTY, NO_EN_PASSANT};
 
 /// Stages of staged move generation, in the order of the search.
@@ -176,6 +176,41 @@ pub struct MoveList {
     moves: [Move; MAX_MOVES],
     scores: [i32; MAX_MOVES],
     len: usize,
+}
+
+impl MoveList {
+    pub const fn new() -> Self {
+        Self {
+            moves: [Move::new(0, 0, MoveFlags::Quiet); MAX_MOVES],
+            scores: [0; MAX_MOVES],
+            len: 0,
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn push(&mut self, mv: Move) {
+        debug_assert!(self.len < MAX_MOVES, "more moves than a position can hold");
+        self.moves[self.len] = mv;
+        self.scores[self.len] = 0;
+        self.len += 1;
+    }
+
+    pub fn moves(&self) -> &[Move] {
+        &self.moves[..self.len]
+    }
+}
+
+impl Default for MoveList {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Generates legal moves only
