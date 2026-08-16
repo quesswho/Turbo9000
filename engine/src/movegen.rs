@@ -177,3 +177,45 @@ pub struct MoveList {
     scores: [i32; MAX_MOVES],
     len: usize,
 }
+
+/// Generates legal moves only
+pub fn generate<Us: Side, const NOISY: bool, const QUIET: bool>(
+    position: &Position,
+    masks: &CheckMasks,
+    list: &mut MoveList,
+) {
+    king_moves::<Us, NOISY, QUIET>(position, masks, list);
+
+    // Nothing but stepping out of the way answers two checkers at once.
+    if masks.double_check() {
+        return;
+    }
+
+    pawn_moves::<Us, NOISY, QUIET>(position, masks, list);
+    piece_moves::<Us, NOISY, QUIET>(position, masks, list);
+}
+
+/// King steps and, in the quiet half, castles.
+fn king_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
+    position: &Position,
+    masks: &CheckMasks,
+    list: &mut MoveList,
+) {
+    todo!()
+}
+
+fn pawn_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
+    position: &Position,
+    masks: &CheckMasks,
+    list: &mut MoveList,
+) {
+    todo!()
+}
+
+fn piece_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
+    position: &Position,
+    masks: &CheckMasks,
+    list: &mut MoveList,
+) {
+    todo!()
+}
