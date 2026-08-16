@@ -1,6 +1,9 @@
 use crate::lookup;
 use crate::moves::{Move, MoveFlags};
-use crate::position::{bit, pop_square, BitBoard, Position, Side, EMPTY, NO_EN_PASSANT};
+use crate::position::{
+    bit, pop_square, square, BitBoard, CastlingRights, Position, Side, Square, EMPTY,
+    NO_EN_PASSANT,
+};
 
 /// Stages of staged move generation, in the order of the search.
 /// Each stage is entered at most once, and only the `Generate*` stages
@@ -230,13 +233,90 @@ pub fn generate<Us: Side, const NOISY: bool, const QUIET: bool>(
     piece_moves::<Us, NOISY, QUIET>(position, masks, list);
 }
 
+/// Mirrors a first rank board onto the side's own back rank.
+const fn home<Us: Side>(board: BitBoard) -> BitBoard {
+    if Us::COLOR.is_white() { board } else { board << 56 }
+}
+
+const fn king_origin<Us: Side>() -> Square {
+    if Us::COLOR.is_white() { square(4, 0) } else { square(4, 7) }
+}
+
+const fn king_side<Us: Side>() -> CastlingRights {
+    if Us::COLOR.is_white() {
+        CastlingRights::WHITE_KING_SIDE
+    } else {
+        CastlingRights::BLACK_KING_SIDE
+    }
+}
+
+const fn queen_side<Us: Side>() -> CastlingRights {
+    if Us::COLOR.is_white() {
+        CastlingRights::WHITE_QUEEN_SIDE
+    } else {
+        CastlingRights::BLACK_QUEEN_SIDE
+    }
+}
+
+fn serialize(list: &mut MoveList, from: Square, mut targets: BitBoard, theirs: BitBoard) {
+    while targets != EMPTY {
+        let to = pop_square(&mut targets);
+        let flags = if bit(to) & theirs == EMPTY {
+            MoveFlags::Quiet
+        } else {
+            MoveFlags::Capture
+        };
+        list.push(Move::new(from, to, flags));
+    }
+}
+
 /// King steps and, in the quiet half, castles.
 fn king_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
     position: &Position,
     masks: &CheckMasks,
     list: &mut MoveList,
 ) {
-    todo!()
+    let theirs = position.color(<Us::Them>::COLOR);
+    let mut targets = EMPTY;
+    if NOISY {
+        targets |= theirs;
+    }
+    if QUIET {
+        targets |= position.empty_squares();
+    }
+
+    // The king walks off the ray instead of covering it, so `active` does not
+    // apply to it.
+    let from = position.king_square(Us::COLOR);
+    let attacks = lookup::KING_ATTACKS[from as usize] & targets & !masks.danger;
+    serialize(list, from, attacks, theirs);
+
+    if QUIET {
+        castles::<Us>(position, masks, list);
+    }
+}
+
+/// The king square is part of the path, which keeps a king in check from
+/// castling out of it.
+fn castles<Us: Side>(position: &Position, masks: &CheckMasks, list: &mut MoveList) {
+    // The rights are only still set if the king never moved.
+    let from = const { king_origin::<Us>() };
+    let occupied = position.occupied();
+    let rights = position.castling();
+
+    if rights.contains(const { king_side::<Us>() })
+        && occupied & const { home::<Us>(0b0110_0000) } == EMPTY
+        && masks.danger & const { home::<Us>(0b0111_0000) } == EMPTY
+    {
+        list.push(Move::new(from, from + 2, MoveFlags::KingCastle));
+    }
+
+    if rights.contains(const { queen_side::<Us>() })
+        && occupied & const { home::<Us>(0b0000_1110) } == EMPTY
+        && masks.danger & const { home::<Us>(0b0001_1100) } == EMPTY
+    {
+        list.push(Move::new(from, from - 2, MoveFlags::QueenCastle));
+    }
 }
 
 fn pawn_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
