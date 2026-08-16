@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use engine::perft::perft;
 use engine::position::Position;
 
@@ -5,7 +7,14 @@ fn check(fen: &str, counts: &[u64]) {
     let mut position: Position = fen.parse().expect("bad fen");
     for (index, expected) in counts.iter().enumerate() {
         let depth = index as u32 + 1;
-        assert_eq!(perft(&mut position, depth), *expected, "{fen} depth {depth}");
+
+        let start = Instant::now();
+        let nodes = perft(&mut position, depth);
+        let elapsed = start.elapsed().as_secs_f64();
+
+        assert_eq!(nodes, *expected, "{fen} depth {depth}");
+        let mnps = nodes as f64 / elapsed / 1e6;
+        println!("{fen} depth {depth}: {nodes} nodes, {mnps:.1} Mnps");
     }
 }
 
