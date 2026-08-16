@@ -319,12 +319,101 @@ fn castles<Us: Side>(position: &Position, masks: &CheckMasks, list: &mut MoveLis
     }
 }
 
+/// Square delta of a pawn step forward and `files` towards the h file.
+const fn pawn_delta<Us: Side>(files: i8) -> i8 {
+    if Us::COLOR.is_white() { 8 + files } else { -8 + files }
+}
+
 fn pawn_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
     position: &Position,
     masks: &CheckMasks,
     list: &mut MoveList,
 ) {
-    todo!()
+    const PROMOTIONS: [MoveFlags; 4] = [
+        MoveFlags::PromoQueen,
+        MoveFlags::PromoKnight,
+        MoveFlags::PromoRook,
+        MoveFlags::PromoBishop,
+    ];
+    const PROMOTION_CAPTURES: [MoveFlags; 4] = [
+        MoveFlags::PromoCaptureQueen,
+        MoveFlags::PromoCaptureKnight,
+        MoveFlags::PromoCaptureRook,
+        MoveFlags::PromoCaptureBishop,
+    ];
+
+    let pawns = position.pawns(Us::COLOR);
+    let king_square = position.king_square(Us::COLOR);
+    let pinned = masks.rook_pin | masks.bishop_pin;
+    let last_rank = const { home::<Us::Them>(0xff) };
+
+    // The whole set steps at once, so a move's origin is its target shifted back.
+    let mut emit = |mut targets: BitBoard, delta: i8, flags: MoveFlags| {
+        while targets != EMPTY {
+            let to = pop_square(&mut targets);
+            let from = (to as i8 - delta) as Square;
+            if bit(from) & pinned != EMPTY
+                && lookup::LINE[king_square as usize][from as usize] & bit(to) == EMPTY
+            {
+                continue;
+            }
+            if bit(to) & last_rank == EMPTY {
+                list.push(Move::new(from, to, flags));
+                continue;
+            }
+            let promotions = if flags == MoveFlags::Capture {
+                PROMOTION_CAPTURES
+            } else {
+                PROMOTIONS
+            };
+            for promotion in promotions {
+                list.push(Move::new(from, to, promotion));
+            }
+        }
+    };
+
+    let empty = position.empty_squares();
+    let single = lookup::pawn_push::<Us>(pawns) & empty;
+    let push = const { pawn_delta::<Us>(0) };
+
+    if QUIET {
+        let double_rank =
+            const { lookup::pawn_push::<Us>(lookup::pawn_push::<Us>(home::<Us>(0xff))) };
+        let double = lookup::pawn_push::<Us>(single & double_rank) & empty;
+        emit(single & !last_rank & masks.active, push, MoveFlags::Quiet);
+        emit(double & masks.active, 2 * push, MoveFlags::DoublePush);
+    }
+
+    if NOISY {
+        let victims = position.color(<Us::Them>::COLOR) & masks.active;
+        emit(single & last_rank & masks.active, push, MoveFlags::Quiet);
+        emit(
+            lookup::pawn_attacks_west::<Us>(pawns) & victims,
+            const { pawn_delta::<Us>(-1) },
+            MoveFlags::Capture,
+        );
+        emit(
+            lookup::pawn_attacks_east::<Us>(pawns) & victims,
+            const { pawn_delta::<Us>(1) },
+            MoveFlags::Capture,
+        );
+
+        // The pawn taken does not stand on the square the capture lands on, so
+        // `active` alone cannot say whether the capture answers a check.
+        if masks.en_passant & (masks.active | masks.en_passant_check) != EMPTY {
+            let to = position.en_passant();
+            let mut takers = lookup::pawn_attacks::<Us::Them>(masks.en_passant) & pawns;
+            while takers != EMPTY {
+                let from = pop_square(&mut takers);
+                if bit(from) & pinned != EMPTY
+                    && lookup::LINE[king_square as usize][from as usize] & masks.en_passant == EMPTY
+                {
+                    continue;
+                }
+                list.push(Move::new(from, to, MoveFlags::EnPassant));
+            }
+        }
+    }
 }
 
 fn piece_moves<Us: Side, const NOISY: bool, const QUIET: bool>(

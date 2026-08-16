@@ -62,13 +62,20 @@ pub static KING_ATTACKS: [BitBoard; 64] = step_attacks(&KING_DELTAS);
 const FILE_A: BitBoard = 0x0101_0101_0101_0101;
 const FILE_H: BitBoard = 0x8080_8080_8080_8080;
 
+/// One step forward and towards the a file.
+pub const fn pawn_attacks_west<S: Side>(pawns: BitBoard) -> BitBoard {
+    let pawns = pawns & !FILE_A;
+    if S::COLOR.is_white() { pawns << 7 } else { pawns >> 9 }
+}
+
+/// One step forward and towards the h file.
+pub const fn pawn_attacks_east<S: Side>(pawns: BitBoard) -> BitBoard {
+    let pawns = pawns & !FILE_H;
+    if S::COLOR.is_white() { pawns << 9 } else { pawns >> 7 }
+}
+
 pub const fn pawn_attacks<S: Side>(pawns: BitBoard) -> BitBoard {
-    let (west, east) = (pawns & !FILE_A, pawns & !FILE_H);
-    if S::COLOR.is_white() {
-        (west << 7) | (east << 9)
-    } else {
-        (east >> 7) | (west >> 9)
-    }
+    pawn_attacks_west::<S>(pawns) | pawn_attacks_east::<S>(pawns)
 }
 
 pub const fn pawn_push<S: Side>(pawns: BitBoard) -> BitBoard {
