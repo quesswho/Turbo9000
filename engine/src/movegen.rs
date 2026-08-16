@@ -421,5 +421,46 @@ fn piece_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
     masks: &CheckMasks,
     list: &mut MoveList,
 ) {
-    todo!()
+    let us = Us::COLOR;
+    let theirs = position.color(<Us::Them>::COLOR);
+    let occupied = position.occupied();
+    let king_square = position.king_square(us);
+    let pinned = masks.rook_pin | masks.bishop_pin;
+
+    let mut targets = EMPTY;
+    if NOISY {
+        targets |= theirs;
+    }
+    if QUIET {
+        targets |= position.empty_squares();
+    }
+    targets &= masks.active;
+
+    // A pinned knight has no move that stays on its line.
+    let mut knights = position.knights(us) & !pinned;
+    while knights != EMPTY {
+        let from = pop_square(&mut knights);
+        let attacks = lookup::KNIGHT_ATTACKS[from as usize] & targets;
+        serialize(list, from, attacks, theirs);
+    }
+
+    let mut diagonal = position.bishops(us) | position.queens(us);
+    while diagonal != EMPTY {
+        let from = pop_square(&mut diagonal);
+        let mut attacks = lookup::bishop_attacks(from, occupied) & targets;
+        if bit(from) & pinned != EMPTY {
+            attacks &= lookup::LINE[king_square as usize][from as usize];
+        }
+        serialize(list, from, attacks, theirs);
+    }
+
+    let mut straight = position.rooks(us) | position.queens(us);
+    while straight != EMPTY {
+        let from = pop_square(&mut straight);
+        let mut attacks = lookup::rook_attacks(from, occupied) & targets;
+        if bit(from) & pinned != EMPTY {
+            attacks &= lookup::LINE[king_square as usize][from as usize];
+        }
+        serialize(list, from, attacks, theirs);
+    }
 }
