@@ -59,6 +59,22 @@ const fn step_attacks(deltas: &[(i8, i8); 8]) -> [BitBoard; 64] {
 pub static KNIGHT_ATTACKS: [BitBoard; 64] = step_attacks(&KNIGHT_DELTAS);
 pub static KING_ATTACKS: [BitBoard; 64] = step_attacks(&KING_DELTAS);
 
+const FILE_A: BitBoard = 0x0101_0101_0101_0101;
+const FILE_H: BitBoard = 0x8080_8080_8080_8080;
+
+pub const fn pawn_attacks<const WHITE: bool>(pawns: BitBoard) -> BitBoard {
+    let (west, east) = (pawns & !FILE_A, pawns & !FILE_H);
+    if WHITE {
+        (west << 7) | (east << 9)
+    } else {
+        (east >> 7) | (west >> 9)
+    }
+}
+
+pub const fn pawn_push<const WHITE: bool>(pawns: BitBoard) -> BitBoard {
+    if WHITE { pawns << 8 } else { pawns >> 8 }
+}
+
 const fn slider_attacks(from: Square, occupied: BitBoard, deltas: &[(i8, i8); 4]) -> BitBoard {
     let mut attacks = EMPTY;
     let mut i = 0;
