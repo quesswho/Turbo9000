@@ -237,6 +237,19 @@ pub fn generate<Us: Side, const NOISY: bool, const QUIET: bool>(
     piece_moves::<Us, NOISY, QUIET>(position, masks, list);
 }
 
+/// Fills the list with every legal move and reports whether we are in check.
+pub fn generate_all<Us: Side>(position: &Position, list: &mut MoveList) -> bool {
+    list.clear();
+    let masks = check_masks::<Us>(position);
+    if masks.in_check() {
+        generate::<Us, true, true>(position, &masks, list);
+    } else {
+        generate::<Us, true, false>(position, &masks, list);
+        generate::<Us, false, true>(position, &masks, list);
+    }
+    masks.in_check()
+}
+
 /// Mirrors a first rank board onto the side's own back rank.
 const fn home<Us: Side>(board: BitBoard) -> BitBoard {
     if Us::COLOR.is_white() { board } else { board << 56 }

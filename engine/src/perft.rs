@@ -1,4 +1,4 @@
-use crate::movegen::{check_masks, generate, MoveList};
+use crate::movegen::{generate_all, MoveList};
 use crate::position::{Black, Position, Side, White};
 
 /// Counts the leaves of the move tree.
@@ -20,14 +20,7 @@ fn run<Us: Side>(position: &mut Position, depth: u32, lists: &mut [MoveList]) ->
     }
 
     let (list, deeper) = lists.split_first_mut().expect("a list for every ply");
-    list.clear();
-    let masks = check_masks::<Us>(position);
-    if masks.in_check() {
-        generate::<Us, true, true>(position, &masks, list);
-    } else {
-        generate::<Us, true, false>(position, &masks, list);
-        generate::<Us, false, true>(position, &masks, list);
-    }
+    generate_all::<Us>(position, list);
 
     if depth == 1 {
         return list.len() as u64;
