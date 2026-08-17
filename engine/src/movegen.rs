@@ -198,6 +198,10 @@ impl MoveList {
         self.len == 0
     }
 
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
     pub fn push(&mut self, mv: Move) {
         debug_assert!(self.len < MAX_MOVES, "more moves than a position can hold");
         self.moves[self.len] = mv;
