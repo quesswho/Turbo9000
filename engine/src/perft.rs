@@ -19,7 +19,7 @@ fn run<Us: Side>(position: &mut Position, depth: u32, lists: &mut [MoveList]) ->
         return 1;
     }
 
-    let (list, deeper) = lists.split_first_mut().expect("a list for every ply");
+    let (list, deeper) = lists.split_first_mut().unwrap();
     generate_all::<Us>(position, list);
 
     if depth == 1 {
