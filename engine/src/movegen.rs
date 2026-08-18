@@ -1,7 +1,7 @@
 use crate::lookup;
 use crate::moves::{Move, MoveFlags};
 use crate::position::{
-    bit, pop_square, square, BitBoard, CastlingRights, Position, Side, Square, EMPTY,
+    bit, pop_square, square, BitBoard, Black, CastlingRights, Position, Side, Square, White, EMPTY,
     NO_EN_PASSANT,
 };
 
@@ -480,4 +480,15 @@ fn piece_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
         }
         serialize(list, from, attacks, theirs);
     }
+}
+
+/// The legal move written in long algebraic notation, as UCI sends them.
+pub fn find_move(position: &Position, text: &str) -> Option<Move> {
+    let mut list = MoveList::new();
+    if position.side_to_move().is_white() {
+        generate_all::<White>(position, &mut list);
+    } else {
+        generate_all::<Black>(position, &mut list);
+    }
+    list.moves().iter().copied().find(|mv| mv.to_string() == text)
 }

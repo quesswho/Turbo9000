@@ -1,63 +1,63 @@
 use std::io::{self, BufRead};
 
-use clap::{Parser, Subcommand, ValueEnum};
-
+use engine::movegen::find_move;
 use engine::perft::perft;
 use engine::position::Position;
 use engine::NAME;
-
-#[derive(Parser)]
-#[command(multicall = true)]
-struct Line {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    Uci,
-    Isready,
-    Ucinewgame,
-    Position {
-        setup: Setup,
-    },
-    Go {
-        #[command(subcommand)]
-        kind: Go,
-    },
-    Quit,
-}
-
-#[derive(Clone, ValueEnum)]
-enum Setup {
-    Startpos,
-}
-
-#[derive(Subcommand)]
-enum Go {
-    Perft { depth: u32 },
-}
 
 fn main() {
     let mut position = Position::starting();
 
     for line in io::stdin().lock().lines().map_while(Result::ok) {
-        let Ok(parsed) = Line::try_parse_from(line.split_whitespace()) else {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let Some((command, arguments)) = tokens.split_first() else {
             continue;
         };
 
-        match parsed.command {
-            Command::Uci => {
+        match *command {
+            "uci" => {
                 println!("id name {NAME}");
                 println!("id author adrian-tudev, quesswho");
                 println!("uciok");
             }
-            Command::Isready => println!("readyok"),
-            Command::Ucinewgame | Command::Position { .. } => position = Position::starting(),
-            Command::Go {
-                kind: Go::Perft { depth },
-            } => println!("Nodes searched: {}", perft(&mut position, depth)),
-            Command::Quit => break,
+            "isready" => println!("readyok"),
+            "ucinewgame" => position = Position::starting(),
+            "position" => {
+                if let Some(parsed) = parse_position(arguments) {
+                    position = parsed;
+                }
+            }
+            "go" => {
+                if let ["perft", depth] = arguments {
+                    if let Ok(depth) = depth.parse() {
+                        println!("Nodes searched: {}", perft(&mut position, depth));
+                    }
+                }
+            }
+            "quit" => break,
+            _ => {}
         }
     }
+}
+
+/// `[startpos | fen <fen>] [moves <move>...]`, where anything unparsable leaves
+/// the position the GUI last set.
+fn parse_position(arguments: &[&str]) -> Option<Position> {
+    let split = arguments
+        .iter()
+        .position(|&token| token == "moves")
+        .unwrap_or(arguments.len());
+    let (setup, moves) = arguments.split_at(split);
+
+    let mut position = match *setup.first()? {
+        "startpos" => Position::starting(),
+        "fen" => setup[1..].join(" ").parse().ok()?,
+        _ => return None,
+    };
+
+    for text in moves.iter().skip(1) {
+        let mv = find_move(&position, text)?;
+        position.make_move(mv);
+    }
+    Some(position)
 }
