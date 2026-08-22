@@ -4,6 +4,7 @@ pub mod moves;
 pub mod perft;
 pub mod position;
 pub mod search;
+pub mod zobrist;
 
 pub const NAME: &str = "Turbo9000";
 
