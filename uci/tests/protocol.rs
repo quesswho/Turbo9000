@@ -43,3 +43,15 @@ fn a_bad_move_leaves_the_position_alone() {
     let output = session("position startpos moves e2e5\ngo perft 1\nquit\n");
     assert!(output.contains("Nodes searched: 20"), "{output}");
 }
+
+#[test]
+fn a_search_answers_with_a_move() {
+    let output = session("position startpos\ngo depth 2\nquit\n");
+    assert!(output.contains("bestmove "), "{output}");
+}
+
+#[test]
+fn a_forced_mate_is_found() {
+    let output = session("position fen 6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1\ngo depth 2\nquit\n");
+    assert!(output.contains("bestmove a1a8"), "{output}");
+}

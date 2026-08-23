@@ -3,6 +3,7 @@ use std::io::{self, BufRead};
 use engine::movegen::find_move;
 use engine::perft::perft;
 use engine::position::Position;
+use engine::search::search;
 use engine::NAME;
 
 fn main() {
@@ -27,13 +28,21 @@ fn main() {
                     position = parsed;
                 }
             }
-            "go" => {
-                if let ["perft", depth] = arguments {
+            "go" => match arguments {
+                ["perft", depth] => {
                     if let Ok(depth) = depth.parse() {
                         println!("Nodes searched: {}", perft(&mut position, depth));
                     }
                 }
-            }
+                ["depth", depth] => {
+                    if let Ok(depth) = depth.parse() {
+                        if let Some(mv) = search(&mut position, depth) {
+                            println!("bestmove {mv}");
+                        }
+                    }
+                }
+                _ => {}
+            },
             "quit" => break,
             _ => {}
         }
