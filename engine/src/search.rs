@@ -34,16 +34,19 @@ pub struct Report {
     pub nodes: u64,
 }
 
-/// Searches to `depth`, reporting no best move when the side to move has none.
 pub fn search(position: &mut Position, depth: u32) -> Report {
     debug_assert!(depth >= 1, "a search shallower than one ply has no move");
     let mut lists = vec![MoveList::new(); depth as usize];
     let mut nodes = 0;
-    let best = if position.side_to_move().is_white() {
-        root::<White>(position, depth, &mut lists, &mut nodes)
-    } else {
-        root::<Black>(position, depth, &mut lists, &mut nodes)
-    };
+
+    let mut best = None;
+    for iteration in 1..=depth {
+        best = if position.side_to_move().is_white() {
+            root::<White>(position, iteration, &mut lists, &mut nodes)
+        } else {
+            root::<Black>(position, iteration, &mut lists, &mut nodes)
+        };
+    }
     Report { best, nodes }
 }
 
