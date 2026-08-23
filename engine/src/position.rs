@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::moves::Move;
+use crate::zobrist;
 
 /// One bit per square, indexed little-endian rank-file: bit 0 is A1, bit 63 is H8.
 pub type BitBoard = u64;
@@ -257,6 +258,7 @@ pub struct Position {
     castling: CastlingRights,
     en_passant: Square,
     halfmove_clock: u8,
+    hash: u64,
 }
 
 /// Undo state returned by `make_move` and passed back to
@@ -267,6 +269,7 @@ pub struct Undo {
     pub castling: CastlingRights,
     pub en_passant: Square,
     pub halfmove_clock: u8,
+    pub hash: u64,
 }
 
 impl Position {
@@ -280,6 +283,7 @@ impl Position {
             castling: CastlingRights::NONE,
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
+            hash: 0,
         }
     }
 
@@ -320,8 +324,10 @@ impl Position {
             castling: CastlingRights::ALL,
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
+            hash: 0,
         };
         position.rebuild_mailbox();
+        position.hash = position.compute_hash();
         position
     }
 
@@ -430,6 +436,28 @@ impl Position {
         self.halfmove_clock = clock.min(100) as u8;
     }
 
+    pub const fn hash(&self) -> u64 {
+        self.hash
+    }
+
+    pub fn compute_hash(&self) -> u64 {
+        let mut hash = EMPTY;
+        let mut occupied = self.occupied;
+        while occupied != EMPTY {
+            let square = pop_square(&mut occupied);
+            let colored = self.mailbox[square as usize].expect("occupied square without a piece");
+            hash ^= zobrist::piece_key(colored, square);
+        }
+        hash ^= zobrist::castling_key(self.castling);
+        if self.en_passant != NO_EN_PASSANT {
+            hash ^= zobrist::en_passant_key(file_of(self.en_passant));
+        }
+        if !self.side_to_move.is_white() {
+            hash ^= zobrist::side_key();
+        }
+        hash
+    }
+
     /// The one place state is captured, so unmake cannot miss a field.
     pub const fn undo(&self, captured: Option<ColoredPiece>) -> Undo {
         Undo {
@@ -437,6 +465,7 @@ impl Position {
             castling: self.castling,
             en_passant: self.en_passant,
             halfmove_clock: self.halfmove_clock,
+            hash: self.hash,
         }
     }
 
@@ -445,16 +474,19 @@ impl Position {
         self.castling = undo.castling;
         self.en_passant = undo.en_passant;
         self.halfmove_clock = undo.halfmove_clock;
+        self.hash = undo.hash;
     }
 
     /// The square must be empty.
     pub fn put_piece(&mut self, square: Square, piece: Piece, color: Color) {
         debug_assert!(self.occupied & bit(square) == EMPTY);
         let mask = bit(square);
+        let colored = ColoredPiece::new(piece, color);
         self.pieces[color.index()][piece.index()] |= mask;
         self.colors[color.index()] |= mask;
         self.occupied |= mask;
-        self.mailbox[square as usize] = Some(ColoredPiece::new(piece, color));
+        self.mailbox[square as usize] = Some(colored);
+        self.hash ^= zobrist::piece_key(colored, square);
     }
 
     /// The piece and color must match what stands on the square.
@@ -465,17 +497,20 @@ impl Position {
         self.colors[color.index()] &= mask;
         self.occupied &= mask;
         self.mailbox[square as usize] = None;
+        self.hash ^= zobrist::piece_key(ColoredPiece::new(piece, color), square);
     }
 
     pub fn move_piece(&mut self, from: Square, to: Square, piece: Piece, color: Color) {
         debug_assert!(self.piece_at(from) == Some(ColoredPiece::new(piece, color)));
         debug_assert!(self.occupied & bit(to) == EMPTY);
         let mask = bit(from) | bit(to);
+        let colored = ColoredPiece::new(piece, color);
         self.pieces[color.index()][piece.index()] ^= mask;
         self.colors[color.index()] ^= mask;
         self.occupied ^= mask;
         self.mailbox[from as usize] = None;
-        self.mailbox[to as usize] = Some(ColoredPiece::new(piece, color));
+        self.mailbox[to as usize] = Some(colored);
+        self.hash ^= zobrist::piece_key(colored, from) ^ zobrist::piece_key(colored, to);
     }
 
     /// Applies a move without checking legality, returning what it destroyed.
@@ -516,18 +551,28 @@ impl Position {
             }
         }
 
+        self.hash ^= zobrist::castling_key(self.castling);
         self.castling.0 &= CASTLE_MASK[from as usize] & CASTLE_MASK[to as usize];
+        self.hash ^= zobrist::castling_key(self.castling);
+
+        if self.en_passant != NO_EN_PASSANT {
+            self.hash ^= zobrist::en_passant_key(file_of(self.en_passant));
+        }
         self.en_passant = if mv.is_double_push() {
             (from + to) / 2
         } else {
             NO_EN_PASSANT
         };
+        if self.en_passant != NO_EN_PASSANT {
+            self.hash ^= zobrist::en_passant_key(file_of(self.en_passant));
+        }
         self.halfmove_clock = if captured.is_some() || moving == Piece::Pawn {
             0
         } else {
             self.halfmove_clock.saturating_add(1)
         };
         self.side_to_move = them;
+        self.hash ^= zobrist::side_key();
 
         undo
     }
@@ -620,6 +665,7 @@ impl FromStr for Position {
         };
 
         position.halfmove_clock = fields.next().and_then(|c| c.parse().ok()).unwrap_or(0);
+        position.hash = position.compute_hash();
 
         Ok(position)
     }
