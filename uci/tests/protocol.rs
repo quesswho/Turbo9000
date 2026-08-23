@@ -55,3 +55,9 @@ fn a_forced_mate_is_found() {
     let output = session("position fen 6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1\ngo depth 2\nquit\n");
     assert!(output.contains("bestmove a1a8"), "{output}");
 }
+
+#[test]
+fn a_search_reports_the_nodes_it_spent() {
+    let output = session("position startpos\ngo depth 2\nquit\n");
+    assert!(output.contains("info depth 2 nodes "), "{output}");
+}

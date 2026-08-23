@@ -3,7 +3,7 @@ use engine::search::search;
 
 fn check(fen: &str, moves: u32, expected: &str) {
     let mut position: Position = fen.parse().expect("bad fen");
-    let found = search(&mut position, moves * 2).expect("no move");
+    let found = search(&mut position, moves * 2).best.expect("no move");
     assert_eq!(found.to_string(), expected, "{fen}");
 }
 

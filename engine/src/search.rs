@@ -28,18 +28,32 @@ pub fn evaluate(position: &Position) -> Score {
         .sum()
 }
 
-/// The best move for the side to move, or `None` when it has none.
-pub fn search(position: &mut Position, depth: u32) -> Option<Move> {
-    debug_assert!(depth >= 1, "a search shallower than one ply has no move");
-    let mut lists = vec![MoveList::new(); depth as usize];
-    if position.side_to_move().is_white() {
-        root::<White>(position, depth, &mut lists)
-    } else {
-        root::<Black>(position, depth, &mut lists)
-    }
+/// Results returned from a search
+pub struct Report {
+    pub best: Option<Move>,
+    pub nodes: u64,
 }
 
-fn root<Us: Side>(position: &mut Position, depth: u32, lists: &mut [MoveList]) -> Option<Move> {
+/// Searches to `depth`, reporting no best move when the side to move has none.
+pub fn search(position: &mut Position, depth: u32) -> Report {
+    debug_assert!(depth >= 1, "a search shallower than one ply has no move");
+    let mut lists = vec![MoveList::new(); depth as usize];
+    let mut nodes = 0;
+    let best = if position.side_to_move().is_white() {
+        root::<White>(position, depth, &mut lists, &mut nodes)
+    } else {
+        root::<Black>(position, depth, &mut lists, &mut nodes)
+    };
+    Report { best, nodes }
+}
+
+fn root<Us: Side>(
+    position: &mut Position,
+    depth: u32,
+    lists: &mut [MoveList],
+    nodes: &mut u64,
+) -> Option<Move> {
+    *nodes += 1;
     let (list, deeper) = lists.split_first_mut().unwrap();
     generate_all::<Us>(position, list);
 
@@ -47,7 +61,7 @@ fn root<Us: Side>(position: &mut Position, depth: u32, lists: &mut [MoveList]) -
     let mut best_score = Score::MIN;
     for &mv in list.moves() {
         let undo = position.make_move(mv);
-        let score = -negamax::<Us::Them>(position, depth - 1, 1, deeper);
+        let score = -negamax::<Us::Them>(position, depth - 1, 1, deeper, nodes);
         position.unmake_move(mv, undo);
         if score > best_score {
             (best, best_score) = (Some(mv), score);
@@ -61,7 +75,9 @@ fn negamax<Us: Side>(
     depth: u32,
     ply: u32,
     lists: &mut [MoveList],
+    nodes: &mut u64,
 ) -> Score {
+    *nodes += 1;
     if depth == 0 {
         return evaluate(position);
     }
@@ -76,7 +92,7 @@ fn negamax<Us: Side>(
     let mut best = Score::MIN;
     for &mv in list.moves() {
         let undo = position.make_move(mv);
-        let score = -negamax::<Us::Them>(position, depth - 1, ply + 1, deeper);
+        let score = -negamax::<Us::Them>(position, depth - 1, ply + 1, deeper, nodes);
         position.unmake_move(mv, undo);
         best = best.max(score);
     }

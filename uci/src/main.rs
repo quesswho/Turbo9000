@@ -1,4 +1,5 @@
 use std::io::{self, BufRead};
+use std::time::Instant;
 
 use engine::movegen::find_move;
 use engine::perft::perft;
@@ -36,7 +37,16 @@ fn main() {
                 }
                 ["depth", depth] => {
                     if let Ok(depth) = depth.parse() {
-                        if let Some(mv) = search(&mut position, depth) {
+                        let start = Instant::now();
+                        let report = search(&mut position, depth);
+                        let micros = start.elapsed().as_micros().max(1);
+                        println!(
+                            "info depth {depth} nodes {} time {} nps {}",
+                            report.nodes,
+                            micros / 1_000,
+                            report.nodes as u128 * 1_000_000 / micros
+                        );
+                        if let Some(mv) = report.best {
                             println!("bestmove {mv}");
                         }
                     }
