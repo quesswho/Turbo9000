@@ -41,7 +41,8 @@ fn main() {
                         let report = search(&mut position, depth);
                         let micros = start.elapsed().as_micros().max(1);
                         println!(
-                            "info depth {depth} nodes {} time {} nps {}",
+                            "info depth {} nodes {} time {} nps {}",
+                            report.depth,
                             report.nodes,
                             micros / 1_000,
                             report.nodes as u128 * 1_000_000 / micros

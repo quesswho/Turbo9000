@@ -31,6 +31,7 @@ pub fn evaluate(position: &Position) -> Score {
 /// Results returned from a search
 pub struct Report {
     pub best: Option<Move>,
+    pub depth: u32,
     pub nodes: u64,
 }
 
@@ -47,7 +48,7 @@ pub fn search(position: &mut Position, depth: u32) -> Report {
             root::<Black>(position, iteration, &mut lists, &mut nodes)
         };
     }
-    Report { best, nodes }
+    Report { best, depth, nodes }
 }
 
 fn root<Us: Side>(
