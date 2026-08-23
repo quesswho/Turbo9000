@@ -61,3 +61,22 @@ fn a_search_reports_the_nodes_it_spent() {
     let output = session("position startpos\ngo depth 2\nquit\n");
     assert!(output.contains("info depth 2 nodes "), "{output}");
 }
+
+#[test]
+fn a_clock_bounded_search_answers_with_a_move() {
+    let output = session("position startpos\ngo wtime 1000 btime 1000 winc 0 binc 0\nquit\n");
+    assert!(output.contains("bestmove "), "{output}");
+}
+
+#[test]
+fn the_side_to_move_reads_its_own_clock() {
+    let output = session("position startpos moves e2e4\ngo wtime 60000 btime 400 winc 0 binc 0\nquit\n");
+    let reported: u64 = output
+        .split_whitespace()
+        .skip_while(|token| *token != "time")
+        .nth(1)
+        .expect("no time reported")
+        .parse()
+        .expect("time was not a number");
+    assert!(reported < 500, "{output}");
+}

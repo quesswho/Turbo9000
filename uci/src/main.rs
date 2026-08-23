@@ -1,11 +1,14 @@
 use std::io::{self, BufRead};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use engine::movegen::find_move;
 use engine::perft::perft;
-use engine::position::Position;
-use engine::search::search;
+use engine::position::{Color, Position};
+use engine::search::{search, Limits};
 use engine::NAME;
+
+/// Slack left on the clock so that reporting a move never flags.
+const MOVE_OVERHEAD: u64 = 50;
 
 fn main() {
     let mut position = Position::starting();
@@ -37,27 +40,57 @@ fn main() {
                 }
                 ["depth", depth] => {
                     if let Ok(depth) = depth.parse() {
-                        let start = Instant::now();
-                        let report = search(&mut position, depth);
-                        let micros = start.elapsed().as_micros().max(1);
-                        println!(
-                            "info depth {} nodes {} time {} nps {}",
-                            report.depth,
-                            report.nodes,
-                            micros / 1_000,
-                            report.nodes as u128 * 1_000_000 / micros
-                        );
-                        if let Some(mv) = report.best {
-                            println!("bestmove {mv}");
-                        }
+                        go(&mut position, Limits::depth(depth));
                     }
                 }
-                _ => {}
+                _ => {
+                    if let Some(span) = parse_clock(arguments, position.side_to_move()) {
+                        go(&mut position, Limits::time(span));
+                    }
+                }
             },
             "quit" => break,
             _ => {}
         }
     }
+}
+
+fn go(position: &mut Position, limits: Limits) {
+    let start = Instant::now();
+    let report = search(position, limits);
+    let micros = start.elapsed().as_micros().max(1);
+    println!(
+        "info depth {} nodes {} time {} nps {}",
+        report.depth,
+        report.nodes,
+        micros / 1_000,
+        report.nodes as u128 * 1_000_000 / micros
+    );
+    if let Some(mv) = report.best {
+        println!("bestmove {mv}");
+    }
+}
+
+/// How much of the clock one move gets. A flat share plus most of the
+/// increment, held clear of the flag by [`MOVE_OVERHEAD`].
+fn parse_clock(arguments: &[&str], us: Color) -> Option<Duration> {
+    let (clock, bonus) = if us.is_white() {
+        ("wtime", "winc")
+    } else {
+        ("btime", "binc")
+    };
+
+    let millis = |name: &str| {
+        arguments
+            .windows(2)
+            .find(|pair| pair[0] == name)
+            .and_then(|pair| pair[1].parse::<u64>().ok())
+    };
+
+    let remaining = millis(clock)?;
+    let increment = millis(bonus).unwrap_or(0);
+    let span = (remaining / 20 + increment / 2).min(remaining.saturating_sub(MOVE_OVERHEAD));
+    Some(Duration::from_millis(span.max(1)))
 }
 
 /// `[startpos | fen <fen>] [moves <move>...]`, where anything unparsable leaves
