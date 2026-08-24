@@ -1,4 +1,6 @@
 use std::io::{self, BufRead};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -14,6 +16,7 @@ const MOVE_OVERHEAD: u64 = 50;
 fn main() {
     let mut position = Position::starting();
     let mut searching = None;
+    let stop = Arc::new(AtomicBool::new(false));
 
     for line in io::stdin().lock().lines().map_while(Result::ok) {
         let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -29,17 +32,18 @@ fn main() {
             }
             "isready" => println!("readyok"),
             "ucinewgame" => {
-                wait(&mut searching);
+                wait(&mut searching, &stop);
                 position = Position::starting();
             }
             "position" => {
-                wait(&mut searching);
+                wait(&mut searching, &stop);
                 if let Some(parsed) = parse_position(arguments) {
                     position = parsed;
                 }
             }
             "go" => {
-                wait(&mut searching);
+                wait(&mut searching, &stop);
+                stop.store(false, Ordering::Relaxed);
                 match arguments {
                     ["perft", depth] => {
                         if let Ok(depth) = depth.parse() {
@@ -48,26 +52,36 @@ fn main() {
                     }
                     ["depth", depth] => {
                         if let Ok(depth) = depth.parse() {
-                            searching = Some(go(position.clone(), Limits::depth(depth)));
+                            let limits = Limits::depth(depth).stopped_by(Arc::clone(&stop));
+                            searching = Some(go(position.clone(), limits));
                         }
                     }
                     _ => {
                         if let Some(span) = parse_clock(arguments, position.side_to_move()) {
-                            searching = Some(go(position.clone(), Limits::time(span)));
+                            let limits = Limits::time(span).stopped_by(Arc::clone(&stop));
+                            searching = Some(go(position.clone(), limits));
                         }
                     }
                 }
             }
-            "quit" => break,
+            "stop" => stop.store(true, Ordering::Relaxed),
+            "quit" => {
+                wait(&mut searching, &stop);
+                break;
+            }
             _ => {}
         }
     }
 
-    wait(&mut searching);
+    // Input running out is not a reason to throw away a search in flight.
+    if let Some(handle) = searching {
+        handle.join().expect("search thread panicked");
+    }
 }
 
-fn wait(searching: &mut Option<JoinHandle<()>>) {
+fn wait(searching: &mut Option<JoinHandle<()>>, stop: &AtomicBool) {
     if let Some(handle) = searching.take() {
+        stop.store(true, Ordering::Relaxed);
         handle.join().expect("search thread panicked");
     }
 }

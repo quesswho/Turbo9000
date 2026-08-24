@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::movegen::{generate_all, MoveList};
@@ -14,10 +16,11 @@ const MAX_DEPTH: u32 = 64;
 /// Number of nodes per budget check
 const CHECK_INTERVAL: u64 = 2048;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Limits {
     depth: u32,
     deadline: Option<Instant>,
+    stop: Option<Arc<AtomicBool>>,
 }
 
 impl Limits {
@@ -25,6 +28,7 @@ impl Limits {
         Self {
             depth,
             deadline: None,
+            stop: None,
         }
     }
 
@@ -33,7 +37,14 @@ impl Limits {
         Self {
             depth: MAX_DEPTH,
             deadline: Some(Instant::now() + span),
+            stop: None,
         }
+    }
+
+    /// Cut the search short once `flag` is raised.
+    pub fn stopped_by(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.stop = Some(flag);
+        self
     }
 }
 
@@ -41,6 +52,7 @@ impl Limits {
 struct Budget {
     nodes: u64,
     deadline: Option<Instant>,
+    stop: Option<Arc<AtomicBool>>,
     stopped: bool,
 }
 
@@ -50,6 +62,9 @@ impl Budget {
         if self.nodes & (CHECK_INTERVAL - 1) == 0 {
             if let Some(deadline) = self.deadline {
                 self.stopped |= Instant::now() >= deadline;
+            }
+            if let Some(flag) = &self.stop {
+                self.stopped |= flag.load(Ordering::Relaxed);
             }
         }
     }
@@ -90,6 +105,7 @@ pub fn search(position: &mut Position, limits: Limits) -> Report {
     let mut budget = Budget {
         nodes: 0,
         deadline: limits.deadline,
+        stop: limits.stop,
         stopped: false,
     };
 
