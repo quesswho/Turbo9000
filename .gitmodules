@@ -1,0 +1,3 @@
+[submodule "external/fastchess"]
+	path = external/fastchess
+	url = https://github.com/Disservin/fastchess
