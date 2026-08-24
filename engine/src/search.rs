@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::movegen::{generate_all, MoveList};
 use crate::moves::Move;
 use crate::position::{Black, Piece, Position, Side, White};
+use crate::ttable::{Flag, TranspositionTable};
 
 pub type Score = i32;
 
@@ -107,7 +108,7 @@ pub struct Report {
     pub nodes: u64,
 }
 
-pub fn search(position: &mut Position, limits: Limits) -> Report {
+pub fn search(position: &mut Position, limits: Limits, table: &TranspositionTable) -> Report {
     debug_assert!(limits.depth >= 1, "a search shallower than one ply has no move");
     let mut lists = vec![MoveList::new(); limits.depth as usize];
     let mut budget = Budget {
@@ -121,9 +122,9 @@ pub fn search(position: &mut Position, limits: Limits) -> Report {
     let mut completed = 0;
     for iteration in 1..=limits.depth {
         let found = if position.side_to_move().is_white() {
-            root::<White>(position, iteration, &mut lists, &mut budget)
+            root::<White>(position, iteration, &mut lists, &mut budget, table)
         } else {
-            root::<Black>(position, iteration, &mut lists, &mut budget)
+            root::<Black>(position, iteration, &mut lists, &mut budget, table)
         };
 
         if budget.stopped {
@@ -144,16 +145,36 @@ fn root<Us: Side>(
     depth: u32,
     lists: &mut [MoveList],
     budget: &mut Budget,
+    table: &TranspositionTable,
 ) -> Option<Move> {
     budget.visit();
+    let hash = position.hash();
+    let hint = table.probe(hash).map(|e| e.best());
     let (list, deeper) = lists.split_first_mut().unwrap();
     generate_all::<Us>(position, list);
+    let tt_move = hint.filter(|&mv| list.moves().contains(&mv));
 
     let mut best = None;
     let mut alpha = -MATE;
-    for &mv in list.moves() {
+
+    if let Some(mv) = tt_move {
         let undo = position.make_move(mv);
-        let score = -negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha, deeper, budget);
+        let score = -negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha, deeper, budget, table);
+        position.unmake_move(mv, undo);
+        if score > alpha {
+            (best, alpha) = (Some(mv), score);
+        }
+        if budget.stopped {
+            return best;
+        }
+    }
+
+    for &mv in list.moves() {
+        if Some(mv) == tt_move {
+            continue;
+        }
+        let undo = position.make_move(mv);
+        let score = -negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha, deeper, budget, table);
         position.unmake_move(mv, undo);
         if score > alpha {
             (best, alpha) = (Some(mv), score);
@@ -161,6 +182,10 @@ fn root<Us: Side>(
         if budget.stopped {
             break;
         }
+    }
+
+    if !budget.stopped && best.is_some() {
+        table.store(hash, best, alpha, depth, 0, Flag::Exact);
     }
     best
 }
@@ -174,14 +199,29 @@ fn negamax<Us: Side>(
     beta: Score,
     lists: &mut [MoveList],
     budget: &mut Budget,
+    table: &TranspositionTable,
 ) -> Score {
     budget.visit();
     if depth == 0 {
         return evaluate(position);
     }
-    
+
     if budget.stopped {
         return 0;
+    }
+
+    let hash = position.hash();
+    let tt_entry = table.probe(hash);
+    if let Some(entry) = tt_entry {
+        if entry.depth() >= depth {
+            let score = entry.score(ply);
+            match entry.flag() {
+                Flag::Exact => return score,
+                Flag::Lower if score >= beta => return score,
+                Flag::Upper if score <= alpha => return score,
+                _ => {}
+            }
+        }
     }
 
     // Every ply keeps its own movelist
@@ -191,14 +231,52 @@ fn negamax<Us: Side>(
         return if in_check { ply as Score - MATE } else { 0 };
     }
 
-    for &mv in list.moves() {
+    let tt_move = tt_entry.and_then(|e| {
+        let mv = e.best();
+        if list.moves().contains(&mv) { Some(mv) } else { None }
+    });
+
+    let alpha_orig = alpha;
+    let mut best_move = None;
+
+    if let Some(mv) = tt_move {
         let undo = position.make_move(mv);
-        let score = -negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha, deeper, budget);
+        let score = -negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha, deeper, budget, table);
         position.unmake_move(mv, undo);
         if score >= beta {
+            if !budget.stopped {
+                table.store(hash, Some(mv), score, depth, ply, Flag::Lower);
+            }
             return beta;
         }
-        alpha = alpha.max(score);
+        if score > alpha {
+            alpha = score;
+            best_move = Some(mv);
+        }
+    }
+
+    for &mv in list.moves() {
+        if Some(mv) == tt_move {
+            continue;
+        }
+        let undo = position.make_move(mv);
+        let score = -negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha, deeper, budget, table);
+        position.unmake_move(mv, undo);
+        if score >= beta {
+            if !budget.stopped {
+                table.store(hash, Some(mv), score, depth, ply, Flag::Lower);
+            }
+            return beta;
+        }
+        if score > alpha {
+            alpha = score;
+            best_move = Some(mv);
+        }
+    }
+
+    if !budget.stopped {
+        let flag = if alpha > alpha_orig { Flag::Exact } else { Flag::Upper };
+        table.store(hash, best_move, alpha, depth, ply, flag);
     }
     alpha
 }

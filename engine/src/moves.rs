@@ -43,6 +43,14 @@ impl Move {
         Self(from as u16 | (to as u16) << 6 | (flags as u16) << 12)
     }
 
+    pub const fn to_bits(self) -> u16 {
+        self.0
+    }
+
+    pub const fn from_bits(bits: u16) -> Self {
+        Self(bits)
+    }
+
     pub const fn from(self) -> Square {
         (self.0 & 0b0011_1111) as Square
     }

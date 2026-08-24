@@ -8,6 +8,7 @@ use engine::movegen::find_move;
 use engine::perft::perft;
 use engine::position::{Color, Position};
 use engine::search::{search, Limits};
+use engine::ttable::TranspositionTable;
 use engine::NAME;
 
 /// Slack left on the clock so that reporting a move never flags.
@@ -15,6 +16,7 @@ const MOVE_OVERHEAD: u64 = 50;
 
 fn main() {
     let mut position = Position::starting();
+    let table = Arc::new(TranspositionTable::new(16));
     let mut searching = None;
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -34,6 +36,7 @@ fn main() {
             "ucinewgame" => {
                 wait(&mut searching, &stop);
                 position = Position::starting();
+                table.clear();
             }
             "position" => {
                 wait(&mut searching, &stop);
@@ -53,7 +56,8 @@ fn main() {
                     _ => {
                         let limits = parse_limits(arguments, position.side_to_move())
                             .stopped_by(Arc::clone(&stop));
-                        searching = Some(go(position.clone(), limits));
+                        let table = Arc::clone(&table);
+                        searching = Some(go(position.clone(), limits, table));
                     }
                 }
             }
@@ -79,10 +83,14 @@ fn wait(searching: &mut Option<JoinHandle<()>>, stop: &AtomicBool) {
     }
 }
 
-fn go(mut position: Position, limits: Limits) -> JoinHandle<()> {
+fn go(
+    mut position: Position,
+    limits: Limits,
+    table: Arc<TranspositionTable>,
+) -> JoinHandle<()> {
     thread::spawn(move || {
         let start = Instant::now();
-        let report = search(&mut position, limits);
+        let report = search(&mut position, limits, &table);
         let micros = start.elapsed().as_micros().max(1);
         println!(
             "info depth {} nodes {} time {} nps {}",
