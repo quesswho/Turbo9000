@@ -1,4 +1,5 @@
 use std::io::{self, BufRead};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine::movegen::find_move;
@@ -12,6 +13,7 @@ const MOVE_OVERHEAD: u64 = 50;
 
 fn main() {
     let mut position = Position::starting();
+    let mut searching = None;
 
     for line in io::stdin().lock().lines().map_while(Result::ok) {
         let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -26,49 +28,66 @@ fn main() {
                 println!("uciok");
             }
             "isready" => println!("readyok"),
-            "ucinewgame" => position = Position::starting(),
+            "ucinewgame" => {
+                wait(&mut searching);
+                position = Position::starting();
+            }
             "position" => {
+                wait(&mut searching);
                 if let Some(parsed) = parse_position(arguments) {
                     position = parsed;
                 }
             }
-            "go" => match arguments {
-                ["perft", depth] => {
-                    if let Ok(depth) = depth.parse() {
-                        println!("Nodes searched: {}", perft(&mut position, depth));
+            "go" => {
+                wait(&mut searching);
+                match arguments {
+                    ["perft", depth] => {
+                        if let Ok(depth) = depth.parse() {
+                            println!("Nodes searched: {}", perft(&mut position, depth));
+                        }
+                    }
+                    ["depth", depth] => {
+                        if let Ok(depth) = depth.parse() {
+                            searching = Some(go(position.clone(), Limits::depth(depth)));
+                        }
+                    }
+                    _ => {
+                        if let Some(span) = parse_clock(arguments, position.side_to_move()) {
+                            searching = Some(go(position.clone(), Limits::time(span)));
+                        }
                     }
                 }
-                ["depth", depth] => {
-                    if let Ok(depth) = depth.parse() {
-                        go(&mut position, Limits::depth(depth));
-                    }
-                }
-                _ => {
-                    if let Some(span) = parse_clock(arguments, position.side_to_move()) {
-                        go(&mut position, Limits::time(span));
-                    }
-                }
-            },
+            }
             "quit" => break,
             _ => {}
         }
     }
+
+    wait(&mut searching);
 }
 
-fn go(position: &mut Position, limits: Limits) {
-    let start = Instant::now();
-    let report = search(position, limits);
-    let micros = start.elapsed().as_micros().max(1);
-    println!(
-        "info depth {} nodes {} time {} nps {}",
-        report.depth,
-        report.nodes,
-        micros / 1_000,
-        report.nodes as u128 * 1_000_000 / micros
-    );
-    if let Some(mv) = report.best {
-        println!("bestmove {mv}");
+fn wait(searching: &mut Option<JoinHandle<()>>) {
+    if let Some(handle) = searching.take() {
+        handle.join().expect("search thread panicked");
     }
+}
+
+fn go(mut position: Position, limits: Limits) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let start = Instant::now();
+        let report = search(&mut position, limits);
+        let micros = start.elapsed().as_micros().max(1);
+        println!(
+            "info depth {} nodes {} time {} nps {}",
+            report.depth,
+            report.nodes,
+            micros / 1_000,
+            report.nodes as u128 * 1_000_000 / micros
+        );
+        if let Some(mv) = report.best {
+            println!("bestmove {mv}");
+        }
+    })
 }
 
 /// How much of the clock one move gets. A flat share plus most of the
