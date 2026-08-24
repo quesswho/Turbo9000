@@ -56,6 +56,14 @@ fn main() {
                             searching = Some(go(position.clone(), limits));
                         }
                     }
+                    ["movetime", millis] => {
+                        if let Ok(millis) = millis.parse::<u64>() {
+                            let span = millis.saturating_sub(MOVE_OVERHEAD).max(1);
+                            let limits = Limits::time(Duration::from_millis(span))
+                                .stopped_by(Arc::clone(&stop));
+                            searching = Some(go(position.clone(), limits));
+                        }
+                    }
                     ["infinite"] => {
                         let limits = Limits::infinite().stopped_by(Arc::clone(&stop));
                         searching = Some(go(position.clone(), limits));
