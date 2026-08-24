@@ -150,13 +150,13 @@ fn root<Us: Side>(
     generate_all::<Us>(position, list);
 
     let mut best = None;
-    let mut best_score = Score::MIN;
+    let mut alpha = -MATE;
     for &mv in list.moves() {
         let undo = position.make_move(mv);
-        let score = -negamax::<Us::Them>(position, depth - 1, 1, deeper, budget);
+        let score = -negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha, deeper, budget);
         position.unmake_move(mv, undo);
-        if score > best_score {
-            (best, best_score) = (Some(mv), score);
+        if score > alpha {
+            (best, alpha) = (Some(mv), score);
         }
         if budget.stopped {
             break;
@@ -165,10 +165,13 @@ fn root<Us: Side>(
     best
 }
 
+/// alpha-beta search
 fn negamax<Us: Side>(
     position: &mut Position,
     depth: u32,
     ply: u32,
+    mut alpha: Score,
+    beta: Score,
     lists: &mut [MoveList],
     budget: &mut Budget,
 ) -> Score {
@@ -188,12 +191,14 @@ fn negamax<Us: Side>(
         return if in_check { ply as Score - MATE } else { 0 };
     }
 
-    let mut best = Score::MIN;
     for &mv in list.moves() {
         let undo = position.make_move(mv);
-        let score = -negamax::<Us::Them>(position, depth - 1, ply + 1, deeper, budget);
+        let score = -negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha, deeper, budget);
         position.unmake_move(mv, undo);
-        best = best.max(score);
+        if score >= beta {
+            return beta;
+        }
+        alpha = alpha.max(score);
     }
-    best
+    alpha
 }
