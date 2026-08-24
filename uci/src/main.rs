@@ -56,6 +56,10 @@ fn main() {
                             searching = Some(go(position.clone(), limits));
                         }
                     }
+                    ["infinite"] => {
+                        let limits = Limits::infinite().stopped_by(Arc::clone(&stop));
+                        searching = Some(go(position.clone(), limits));
+                    }
                     _ => {
                         if let Some(span) = parse_clock(arguments, position.side_to_move()) {
                             let limits = Limits::time(span).stopped_by(Arc::clone(&stop));

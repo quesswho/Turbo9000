@@ -41,6 +41,14 @@ impl Limits {
         }
     }
 
+    pub const fn infinite() -> Self {
+        Self {
+            depth: MAX_DEPTH,
+            deadline: None,
+            stop: None,
+        }
+    }
+
     /// Cut the search short once `flag` is raised.
     pub fn stopped_by(mut self, flag: Arc<AtomicBool>) -> Self {
         self.stop = Some(flag);
