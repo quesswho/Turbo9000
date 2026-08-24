@@ -50,29 +50,10 @@ fn main() {
                             println!("Nodes searched: {}", perft(&mut position, depth));
                         }
                     }
-                    ["depth", depth] => {
-                        if let Ok(depth) = depth.parse() {
-                            let limits = Limits::depth(depth).stopped_by(Arc::clone(&stop));
-                            searching = Some(go(position.clone(), limits));
-                        }
-                    }
-                    ["movetime", millis] => {
-                        if let Ok(millis) = millis.parse::<u64>() {
-                            let span = millis.saturating_sub(MOVE_OVERHEAD).max(1);
-                            let limits = Limits::time(Duration::from_millis(span))
-                                .stopped_by(Arc::clone(&stop));
-                            searching = Some(go(position.clone(), limits));
-                        }
-                    }
-                    ["infinite"] => {
-                        let limits = Limits::infinite().stopped_by(Arc::clone(&stop));
-                        searching = Some(go(position.clone(), limits));
-                    }
                     _ => {
-                        if let Some(span) = parse_clock(arguments, position.side_to_move()) {
-                            let limits = Limits::time(span).stopped_by(Arc::clone(&stop));
-                            searching = Some(go(position.clone(), limits));
-                        }
+                        let limits = parse_limits(arguments, position.side_to_move())
+                            .stopped_by(Arc::clone(&stop));
+                        searching = Some(go(position.clone(), limits));
                     }
                 }
             }
@@ -116,6 +97,27 @@ fn go(mut position: Position, limits: Limits) -> JoinHandle<()> {
     })
 }
 
+fn parse_limits(arguments: &[&str], us: Color) -> Limits {
+    if let Some(depth) = named(arguments, "depth") {
+        return Limits::depth(depth.max(1) as u32);
+    }
+    if let Some(millis) = named(arguments, "movetime") {
+        return Limits::time(Duration::from_millis(millis.saturating_sub(MOVE_OVERHEAD).max(1)));
+    }
+    match parse_clock(arguments, us) {
+        Some(span) => Limits::time(span),
+        None => Limits::infinite(),
+    }
+}
+
+/// The value the GUI gave `name`.
+fn named(arguments: &[&str], name: &str) -> Option<u64> {
+    arguments
+        .windows(2)
+        .find(|pair| pair[0] == name)
+        .and_then(|pair| pair[1].parse::<u64>().ok())
+}
+
 /// How much of the clock one move gets. A flat share plus most of the
 /// increment, held clear of the flag by [`MOVE_OVERHEAD`].
 fn parse_clock(arguments: &[&str], us: Color) -> Option<Duration> {
@@ -125,15 +127,8 @@ fn parse_clock(arguments: &[&str], us: Color) -> Option<Duration> {
         ("btime", "binc")
     };
 
-    let millis = |name: &str| {
-        arguments
-            .windows(2)
-            .find(|pair| pair[0] == name)
-            .and_then(|pair| pair[1].parse::<u64>().ok())
-    };
-
-    let remaining = millis(clock)?;
-    let increment = millis(bonus).unwrap_or(0);
+    let remaining = named(arguments, clock)?;
+    let increment = named(arguments, bonus).unwrap_or(0);
     let span = (remaining / 20 + increment / 2).min(remaining.saturating_sub(MOVE_OVERHEAD));
     Some(Duration::from_millis(span.max(1)))
 }
