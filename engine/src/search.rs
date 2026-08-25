@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::movegen::{generate_all, MoveList};
+use crate::movegen::{check_masks, generate, generate_all, MoveList};
 use crate::moves::Move;
 use crate::position::{Black, Piece, Position, Side, White};
 use crate::ttable::{Flag, TranspositionTable};
@@ -16,6 +16,9 @@ const MAX_DEPTH: u32 = 64;
 
 /// Number of nodes per budget check
 const CHECK_INTERVAL: u64 = 2048;
+
+/// How many plies of captures the quiescence search may follow.
+const QUIESCENCE_DEPTH: usize = 8;
 
 #[derive(Clone)]
 pub struct Limits {
@@ -110,7 +113,7 @@ pub struct Report {
 
 pub fn search(position: &mut Position, limits: Limits, table: &TranspositionTable) -> Report {
     debug_assert!(limits.depth >= 1, "a search shallower than one ply has no move");
-    let mut lists = vec![MoveList::new(); limits.depth as usize];
+    let mut lists = vec![MoveList::new(); limits.depth as usize + QUIESCENCE_DEPTH];
     let mut budget = Budget {
         nodes: 0,
         deadline: limits.deadline,
@@ -203,7 +206,7 @@ fn negamax<Us: Side>(
 ) -> Score {
     budget.visit();
     if depth == 0 {
-        return evaluate(position);
+        return quiescence::<Us>(position, alpha, beta, lists, budget);
     }
 
     if budget.stopped {
@@ -277,6 +280,48 @@ fn negamax<Us: Side>(
     if !budget.stopped {
         let flag = if alpha > alpha_orig { Flag::Exact } else { Flag::Upper };
         table.store(hash, best_move, alpha, depth, ply, flag);
+    }
+    alpha
+}
+
+/// Plays out the captures so the leaf is not evaluated mid trade.
+fn quiescence<Us: Side>(
+    position: &mut Position,
+    mut alpha: Score,
+    beta: Score,
+    lists: &mut [MoveList],
+    budget: &mut Budget,
+) -> Score {
+    budget.visit();
+    let stand_pat = evaluate(position);
+    if stand_pat >= beta {
+        return beta;
+    }
+    if stand_pat > alpha {
+        alpha = stand_pat;
+    }
+
+    let Some((list, deeper)) = lists.split_first_mut() else {
+        return alpha;
+    };
+    if budget.stopped {
+        return alpha;
+    }
+
+    let masks = check_masks::<Us>(position);
+    list.clear();
+    generate::<Us, true, false>(position, &masks, list);
+
+    for &mv in list.moves() {
+        let undo = position.make_move(mv);
+        let score = -quiescence::<Us::Them>(position, -beta, -alpha, deeper, budget);
+        position.unmake_move(mv, undo);
+        if score >= beta {
+            return beta;
+        }
+        if score > alpha {
+            alpha = score;
+        }
     }
     alpha
 }
