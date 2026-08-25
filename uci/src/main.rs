@@ -7,12 +7,15 @@ use std::time::{Duration, Instant};
 use engine::movegen::find_move;
 use engine::perft::perft;
 use engine::position::{Color, Position};
-use engine::search::{search, Limits};
+use engine::search::{search, Limits, Score, MATE};
 use engine::ttable::TranspositionTable;
 use engine::NAME;
 
 /// Slack left on the clock so that reporting a move never flags.
 const MOVE_OVERHEAD: u64 = 50;
+
+/// Beyond this distance from mate a score is ordinary centipawns.
+const MAX_MATE_PLIES: Score = 128;
 
 fn main() {
     let mut position = Position::starting();
@@ -93,8 +96,9 @@ fn go(
         let report = search(&mut position, limits, &table);
         let micros = start.elapsed().as_micros().max(1);
         println!(
-            "info depth {} nodes {} time {} nps {}",
+            "info depth {} score {} nodes {} time {} nps {}",
             report.depth,
+            report_score(report.score),
             report.nodes,
             micros / 1_000,
             report.nodes as u128 * 1_000_000 / micros
@@ -103,6 +107,17 @@ fn go(
             println!("bestmove {mv}");
         }
     })
+}
+
+/// Mate scores count plies from the root, the protocol wants moves.
+fn report_score(score: Score) -> String {
+    let plies = MATE - score.abs();
+    if plies <= MAX_MATE_PLIES {
+        let moves = (plies + 1) / 2;
+        format!("mate {}", if score < 0 { -moves } else { moves })
+    } else {
+        format!("cp {score}")
+    }
 }
 
 fn parse_limits(arguments: &[&str], us: Color) -> Limits {

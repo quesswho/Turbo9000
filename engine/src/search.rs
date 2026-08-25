@@ -107,6 +107,7 @@ pub fn evaluate(position: &Position) -> Score {
 /// Results returned from a search
 pub struct Report {
     pub best: Option<Move>,
+    pub score: Score,
     pub depth: u32,
     pub nodes: u64,
 }
@@ -122,22 +123,26 @@ pub fn search(position: &mut Position, limits: Limits, table: &TranspositionTabl
     };
 
     let mut best = None;
+    let mut score = 0;
     let mut completed = 0;
     for iteration in 1..=limits.depth {
-        let found = if position.side_to_move().is_white() {
+        let (found, found_score) = if position.side_to_move().is_white() {
             root::<White>(position, iteration, &mut lists, &mut budget, table)
         } else {
             root::<Black>(position, iteration, &mut lists, &mut budget, table)
         };
 
         if budget.stopped {
-            best = best.or(found);
+            if best.is_none() {
+                (best, score) = (found, found_score);
+            }
             break;
         }
-        (best, completed) = (found, iteration);
+        (best, score, completed) = (found, found_score, iteration);
     }
     Report {
         best,
+        score,
         depth: completed,
         nodes: budget.nodes,
     }
@@ -149,7 +154,7 @@ fn root<Us: Side>(
     lists: &mut [MoveList],
     budget: &mut Budget,
     table: &TranspositionTable,
-) -> Option<Move> {
+) -> (Option<Move>, Score) {
     budget.visit();
     let hash = position.hash();
     let hint = table.probe(hash).map(|e| e.best());
@@ -168,7 +173,7 @@ fn root<Us: Side>(
             (best, alpha) = (Some(mv), score);
         }
         if budget.stopped {
-            return best;
+            return (best, alpha);
         }
     }
 
@@ -190,7 +195,7 @@ fn root<Us: Side>(
     if !budget.stopped && best.is_some() {
         table.store(hash, best, alpha, depth, 0, Flag::Exact);
     }
-    best
+    (best, alpha)
 }
 
 /// alpha-beta search
