@@ -1,6 +1,8 @@
 # Turbo9000
 A terrible chess engine written in Rust.
 
+<img src="assets/mascot.png" alt="turbo mascot" width="300"/>
+
 ## Play against Turbo9000
 Turbo9000 has just enough support for UCI and can be played on any GUI that speaks it, for example knights.
 
