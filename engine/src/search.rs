@@ -2,9 +2,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::eval::{evaluate};
 use crate::movegen::{check_masks, generate, generate_all, MoveList};
 use crate::moves::Move;
-use crate::position::{Black, Piece, Position, Side, White};
+use crate::position::{Black, Position, Side, White};
 use crate::ttable::{Flag, TranspositionTable};
 
 pub type Score = i32;
@@ -80,28 +81,6 @@ impl Budget {
             }
         }
     }
-}
-
-const MATERIAL: [(Piece, Score); 5] = [
-    (Piece::Pawn, 100),
-    (Piece::Knight, 320),
-    (Piece::Bishop, 330),
-    (Piece::Rook, 500),
-    (Piece::Queen, 900),
-];
-
-/// TODO: extremely simplified evaluation for now, move eval to eval.rs 
-pub fn evaluate(position: &Position) -> Score {
-    let us = position.side_to_move();
-    let them = us.flip();
-    MATERIAL
-        .iter()
-        .map(|&(piece, value)| {
-            let ours = position.pieces(piece, us).count_ones() as Score;
-            let theirs = position.pieces(piece, them).count_ones() as Score;
-            value * (ours - theirs)
-        })
-        .sum()
 }
 
 /// Results returned from a search
