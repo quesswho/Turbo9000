@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::moves::{Move, MoveFlags};
+use crate::moves::Move;
 use crate::search::{MATE, Score};
 
 /// Furthest ply from root we expect; scores within this band of `±MATE`
@@ -27,9 +27,6 @@ impl Flag {
         }
     }
 }
-
-/// A legal null move, used as the sentinel for "no best move" in [`Entry`].
-const NULL_MOVE: Move = Move::new(0, 0, MoveFlags::Quiet);
 
 /// A single 64-bit slot, packed as:
 /// - bits 0..16:  key (high 16 bits of the zobrist hash)
@@ -144,7 +141,7 @@ impl TranspositionTable {
         };
         let new_entry = Entry::pack(
             key,
-            best.unwrap_or(NULL_MOVE),
+            best.unwrap_or(Move::NULL),
             stored_score as i16,
             depth as u8,
             flag as u8,

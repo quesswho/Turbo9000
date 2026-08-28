@@ -38,6 +38,8 @@ pub enum MoveFlags {
 pub struct Move(u16);
 
 impl Move {
+    pub const NULL: Self = Self(0);
+
     pub const fn new(from: Square, to: Square, flags: MoveFlags) -> Self {
         debug_assert!(from < 64 && to < 64);
         Self(from as u16 | (to as u16) << 6 | (flags as u16) << 12)

@@ -136,30 +136,16 @@ fn root<Us: Side>(
 ) -> (Option<Move>, Score) {
     budget.visit();
     let hash = position.hash();
-    let hint = table.probe(hash).map(|e| e.best());
+    let hint = table.probe(hash).map_or(Move::NULL, |e| e.best());
     let (list, deeper) = lists.split_first_mut().unwrap();
     generate_all::<Us>(position, list);
-    let tt_move = hint.filter(|&mv| list.moves().contains(&mv));
+    list.score(position, hint);
 
     let mut best = None;
     let mut alpha = -MATE;
 
-    if let Some(mv) = tt_move {
-        let undo = position.make_move(mv);
-        let score = -negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha, deeper, budget, table);
-        position.unmake_move(mv, undo);
-        if score > alpha {
-            (best, alpha) = (Some(mv), score);
-        }
-        if budget.stopped {
-            return (best, alpha);
-        }
-    }
-
-    for &mv in list.moves() {
-        if Some(mv) == tt_move {
-            continue;
-        }
+    for index in 0..list.len() {
+        let mv = list.pick(index);
         let undo = position.make_move(mv);
         let score = -negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha, deeper, budget, table);
         position.unmake_move(mv, undo);
@@ -218,34 +204,14 @@ fn negamax<Us: Side>(
         return if in_check { ply as Score - MATE } else { 0 };
     }
 
-    let tt_move = tt_entry.and_then(|e| {
-        let mv = e.best();
-        if list.moves().contains(&mv) { Some(mv) } else { None }
-    });
+    let tt_move = tt_entry.map_or(Move::NULL, |e| e.best());
+    list.score(position, tt_move);
 
     let alpha_orig = alpha;
     let mut best_move = None;
 
-    if let Some(mv) = tt_move {
-        let undo = position.make_move(mv);
-        let score = -negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha, deeper, budget, table);
-        position.unmake_move(mv, undo);
-        if score >= beta {
-            if !budget.stopped {
-                table.store(hash, Some(mv), score, depth, ply, Flag::Lower);
-            }
-            return beta;
-        }
-        if score > alpha {
-            alpha = score;
-            best_move = Some(mv);
-        }
-    }
-
-    for &mv in list.moves() {
-        if Some(mv) == tt_move {
-            continue;
-        }
+    for index in 0..list.len() {
+        let mv = list.pick(index);
         let undo = position.make_move(mv);
         let score = -negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha, deeper, budget, table);
         position.unmake_move(mv, undo);
@@ -295,8 +261,10 @@ fn quiescence<Us: Side>(
     let masks = check_masks::<Us>(position);
     list.clear();
     generate::<Us, true, false>(position, &masks, list);
+    list.score(position, Move::NULL);
 
-    for &mv in list.moves() {
+    for index in 0..list.len() {
+        let mv = list.pick(index);
         let undo = position.make_move(mv);
         let score = -quiescence::<Us::Them>(position, -beta, -alpha, deeper, budget);
         position.unmake_move(mv, undo);

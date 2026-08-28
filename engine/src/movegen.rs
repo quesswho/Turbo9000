@@ -1,8 +1,8 @@
 use crate::lookup;
 use crate::moves::{Move, MoveFlags};
 use crate::position::{
-    bit, pop_square, square, BitBoard, Black, CastlingRights, Position, Side, Square, White, EMPTY,
-    NO_EN_PASSANT,
+    bit, pop_square, square, BitBoard, Black, CastlingRights, Piece, Position, Side, Square, White,
+    EMPTY, NO_EN_PASSANT,
 };
 
 /// Stages of staged move generation, in the order of the search.
@@ -174,6 +174,26 @@ pub fn check_masks<Us: Side>(position: &Position) -> CheckMasks {
 
 pub const MAX_MOVES: usize = 218;
 
+const TT_RANK: i32 = i32::MAX;
+const CAPTURE_RANK: i32 = 1 << 20;
+const PROMOTION_RANK: i32 = 1 << 19;
+
+/// `MVV_LVA[victim][attacker]`: most valuable victim, cheapest attacker.
+const MVV_LVA: [[i32; Piece::COUNT]; Piece::COUNT] = {
+    let victims = [100, 320, 330, 500, 900, 0];
+    let mut table = [[0; Piece::COUNT]; Piece::COUNT];
+    let mut victim = 0;
+    while victim < Piece::COUNT {
+        let mut attacker = 0;
+        while attacker < Piece::COUNT {
+            table[victim][attacker] = CAPTURE_RANK + victims[victim] * 16 - attacker as i32;
+            attacker += 1;
+        }
+        victim += 1;
+    }
+    table
+};
+
 #[derive(Clone)]
 pub struct MoveList {
     moves: [Move; MAX_MOVES],
@@ -211,6 +231,44 @@ impl MoveList {
 
     pub fn moves(&self) -> &[Move] {
         &self.moves[..self.len]
+    }
+
+    /// A `tt_move` that is not in the list simply never matches.
+    pub fn score(&mut self, position: &Position, tt_move: Move) {
+        for i in 0..self.len {
+            self.scores[i] = rank(position, self.moves[i], tt_move);
+        }
+    }
+
+    /// Swaps the best move from `start` onwards into `start` and returns it.
+    /// Picking on demand beats sorting since most nodes cut off early.
+    pub fn pick(&mut self, start: usize) -> Move {
+        let scores = &self.scores[start..self.len];
+        let mut best = 0;
+        for i in 1..scores.len() {
+            if scores[i] > scores[best] {
+                best = i;
+            }
+        }
+        let best = start + best;
+        self.moves.swap(start, best);
+        self.scores.swap(start, best);
+        self.moves[start]
+    }
+}
+
+fn rank(position: &Position, mv: Move, tt_move: Move) -> i32 {
+    if mv == tt_move {
+        TT_RANK
+    } else if mv.is_capture() {
+        // En passant leaves `to` empty, and the victim is always a pawn.
+        let victim = position.piece_at(mv.to()).map_or(Piece::Pawn, |on| on.piece());
+        let attacker = position.piece_at(mv.from()).map_or(Piece::Pawn, |on| on.piece());
+        MVV_LVA[victim.index()][attacker.index()]
+    } else if mv.is_promotion() {
+        PROMOTION_RANK + mv.promoted_piece().index() as i32
+    } else {
+        0
     }
 }
 
