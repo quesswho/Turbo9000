@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::eval::{evaluate};
-use crate::movegen::{check_masks, generate, generate_all, MoveList};
+use crate::movegen::{check_masks, generate, generate_all, MoveList, HISTORY_MAX};
 use crate::moves::Move;
-use crate::position::{Black, Position, Side, White};
+use crate::position::{Black, Color, Position, Side, White};
 use crate::ttable::{Flag, TranspositionTable};
 
 pub type Score = i32;
@@ -65,6 +65,8 @@ impl Limits {
 struct Searcher<'a> {
     table: &'a TranspositionTable,
     lists: Vec<MoveList>,
+    killers: Vec<[Move; 2]>,
+    history: Vec<[[i32; 64]; 64]>,
     seen: Vec<u64>,
     nodes: u64,
     deadline: Option<Instant>,
@@ -83,6 +85,25 @@ impl Searcher<'_> {
                 self.stopped |= flag.load(Ordering::Relaxed);
             }
         }
+    }
+}
+
+impl Searcher<'_> {
+    /// A quiet move that caused a cutoff is tried first at the same ply of a
+    /// sibling line, where it very often cuts again.
+    fn remember_killer(&mut self, mv: Move, ply: usize) {
+        if self.killers[ply][0] != mv {
+            self.killers[ply][1] = self.killers[ply][0];
+            self.killers[ply][0] = mv;
+        }
+    }
+
+    /// Quiet moves that cut anywhere in the tree are tried before the rest.
+    /// The bonus decays towards `HISTORY_MAX` so the table cannot run away.
+    fn reward_history(&mut self, mv: Move, side: usize, depth: u32) {
+        let bonus = ((depth * depth) as i32).min(HISTORY_MAX);
+        let entry = &mut self.history[side][mv.from() as usize][mv.to() as usize];
+        *entry += bonus - *entry * bonus / HISTORY_MAX;
     }
 }
 
@@ -119,6 +140,8 @@ pub fn search(
     let mut searcher = Searcher {
         table,
         lists: vec![MoveList::new(); limits.depth as usize + QUIESCENCE_DEPTH],
+        killers: vec![[Move::NULL; 2]; limits.depth as usize + QUIESCENCE_DEPTH],
+        history: vec![[[0; 64]; 64]; Color::COUNT],
         seen,
         nodes: 0,
         deadline: limits.deadline,
@@ -162,7 +185,9 @@ impl Searcher<'_> {
         let hash = position.hash();
         let hint = self.table.probe(hash).map_or(Move::NULL, |e| e.best());
         generate_all::<Us>(position, &mut self.lists[0]);
-        self.lists[0].score(position, hint);
+        let killers = self.killers[0];
+        let side = position.side_to_move().index();
+        self.lists[0].score(position, hint, killers, &self.history[side]);
 
         let mut best = None;
         let mut alpha = -MATE;
@@ -236,7 +261,9 @@ impl Searcher<'_> {
         }
 
         let tt_move = tt_entry.map_or(Move::NULL, |e| e.best());
-        self.lists[here].score(position, tt_move);
+        let killers = self.killers[here];
+        let side = position.side_to_move().index();
+        self.lists[here].score(position, tt_move, killers, &self.history[side]);
 
         let alpha_orig = alpha;
         let mut best_move = None;
@@ -249,6 +276,10 @@ impl Searcher<'_> {
             position.unmake_move(mv, undo);
             if score >= beta {
                 self.seen.pop();
+                if !mv.is_capture() && !mv.is_promotion() {
+                    self.remember_killer(mv, here);
+                    self.reward_history(mv, position.side_to_move().index(), depth);
+                }
                 if !self.stopped {
                     self.table.store(hash, Some(mv), score, depth, ply, Flag::Lower);
                 }
@@ -293,7 +324,7 @@ impl Searcher<'_> {
         let masks = check_masks::<Us>(position);
         self.lists[here].clear();
         generate::<Us, true, false>(position, &masks, &mut self.lists[here]);
-        self.lists[here].score(position, Move::NULL);
+        self.lists[here].score(position, Move::NULL, [Move::NULL; 2], &self.history[0]);
 
         for index in 0..self.lists[here].len() {
             let mv = self.lists[here].pick(index);

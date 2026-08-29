@@ -177,6 +177,10 @@ pub const MAX_MOVES: usize = 218;
 const TT_RANK: i32 = i32::MAX;
 const CAPTURE_RANK: i32 = 1 << 20;
 const PROMOTION_RANK: i32 = 1 << 19;
+const KILLER_RANK: i32 = 1 << 18;
+
+/// Bounds a history score so a quiet move can never outrank a killer.
+pub const HISTORY_MAX: i32 = 1 << 14;
 
 /// `MVV_LVA[victim][attacker]`: most valuable victim, cheapest attacker.
 const MVV_LVA: [[i32; Piece::COUNT]; Piece::COUNT] = {
@@ -234,9 +238,15 @@ impl MoveList {
     }
 
     /// A `tt_move` that is not in the list simply never matches.
-    pub fn score(&mut self, position: &Position, tt_move: Move) {
+    pub fn score(
+        &mut self,
+        position: &Position,
+        tt_move: Move,
+        killers: [Move; 2],
+        history: &[[i32; 64]; 64],
+    ) {
         for i in 0..self.len {
-            self.scores[i] = rank(position, self.moves[i], tt_move);
+            self.scores[i] = rank(position, self.moves[i], tt_move, killers, history);
         }
     }
 
@@ -257,7 +267,13 @@ impl MoveList {
     }
 }
 
-fn rank(position: &Position, mv: Move, tt_move: Move) -> i32 {
+fn rank(
+    position: &Position,
+    mv: Move,
+    tt_move: Move,
+    killers: [Move; 2],
+    history: &[[i32; 64]; 64],
+) -> i32 {
     if mv == tt_move {
         TT_RANK
     } else if mv.is_capture() {
@@ -267,8 +283,12 @@ fn rank(position: &Position, mv: Move, tt_move: Move) -> i32 {
         MVV_LVA[victim.index()][attacker.index()]
     } else if mv.is_promotion() {
         PROMOTION_RANK + mv.promoted_piece().index() as i32
+    } else if mv == killers[0] {
+        KILLER_RANK + 1
+    } else if mv == killers[1] {
+        KILLER_RANK
     } else {
-        0
+        history[mv.from() as usize][mv.to() as usize]
     }
 }
 
