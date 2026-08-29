@@ -19,6 +19,7 @@ const MAX_MATE_PLIES: Score = 128;
 
 fn main() {
     let mut position = Position::starting();
+    let mut history = Vec::new();
     let table = Arc::new(TranspositionTable::new(16));
     let mut searching = None;
     let stop = Arc::new(AtomicBool::new(false));
@@ -39,12 +40,13 @@ fn main() {
             "ucinewgame" => {
                 wait(&mut searching, &stop);
                 position = Position::starting();
+                history.clear();
                 table.clear();
             }
             "position" => {
                 wait(&mut searching, &stop);
-                if let Some(parsed) = parse_position(arguments) {
-                    position = parsed;
+                if let Some((parsed, played)) = parse_position(arguments) {
+                    (position, history) = (parsed, played);
                 }
             }
             "go" => {
@@ -60,7 +62,7 @@ fn main() {
                         let limits = parse_limits(arguments, position.side_to_move())
                             .stopped_by(Arc::clone(&stop));
                         let table = Arc::clone(&table);
-                        searching = Some(go(position.clone(), limits, table));
+                        searching = Some(go(position.clone(), limits, table, history.clone()));
                     }
                 }
             }
@@ -90,10 +92,11 @@ fn go(
     mut position: Position,
     limits: Limits,
     table: Arc<TranspositionTable>,
+    history: Vec<u64>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let start = Instant::now();
-        let report = search(&mut position, limits, &table);
+        let report = search(&mut position, limits, &table, &history);
         let micros = start.elapsed().as_micros().max(1);
         println!(
             "info depth {} score {} nodes {} time {} nps {}",
@@ -158,7 +161,7 @@ fn parse_clock(arguments: &[&str], us: Color) -> Option<Duration> {
 
 /// `[startpos | fen <fen>] [moves <move>...]`, where anything unparsable leaves
 /// the position the GUI last set.
-fn parse_position(arguments: &[&str]) -> Option<Position> {
+fn parse_position(arguments: &[&str]) -> Option<(Position, Vec<u64>)> {
     let split = arguments
         .iter()
         .position(|&token| token == "moves")
@@ -171,9 +174,11 @@ fn parse_position(arguments: &[&str]) -> Option<Position> {
         _ => return None,
     };
 
+    let mut history = Vec::with_capacity(moves.len());
     for text in moves.iter().skip(1) {
         let mv = find_move(&position, text)?;
+        history.push(position.hash());
         position.make_move(mv);
     }
-    Some(position)
+    Some((position, history))
 }
