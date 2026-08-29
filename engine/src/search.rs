@@ -62,14 +62,17 @@ impl Limits {
 }
 
 /// Per thread budget
-struct Budget {
+struct Searcher<'a> {
+    table: &'a TranspositionTable,
+    lists: Vec<MoveList>,
+    seen: Vec<u64>,
     nodes: u64,
     deadline: Option<Instant>,
     stop: Option<Arc<AtomicBool>>,
     stopped: bool,
 }
 
-impl Budget {
+impl Searcher<'_> {
     fn visit(&mut self) {
         self.nodes += 1;
         if self.nodes & (CHECK_INTERVAL - 1) == 0 {
@@ -111,10 +114,12 @@ pub fn search(
     history: &[u64],
 ) -> Report {
     debug_assert!(limits.depth >= 1, "a search shallower than one ply has no move");
-    let mut lists = vec![MoveList::new(); limits.depth as usize + QUIESCENCE_DEPTH];
     let mut seen = Vec::with_capacity(history.len() + limits.depth as usize + 1);
     seen.extend_from_slice(history);
-    let mut budget = Budget {
+    let mut searcher = Searcher {
+        table,
+        lists: vec![MoveList::new(); limits.depth as usize + QUIESCENCE_DEPTH],
+        seen,
         nodes: 0,
         deadline: limits.deadline,
         stop: limits.stop,
@@ -126,12 +131,12 @@ pub fn search(
     let mut completed = 0;
     for iteration in 1..=limits.depth {
         let (found, found_score) = if position.side_to_move().is_white() {
-            root::<White>(position, iteration, &mut lists, &mut budget, table, &mut seen)
+            searcher.root::<White>(position, iteration)
         } else {
-            root::<Black>(position, iteration, &mut lists, &mut budget, table, &mut seen)
+            searcher.root::<Black>(position, iteration)
         };
 
-        if budget.stopped {
+        if searcher.stopped {
             if best.is_none() {
                 (best, score) = (found, found_score);
             }
@@ -143,181 +148,165 @@ pub fn search(
         best,
         score,
         depth: completed,
-        nodes: budget.nodes,
+        nodes: searcher.nodes,
     }
 }
 
-fn root<Us: Side>(
-    position: &mut Position,
-    depth: u32,
-    lists: &mut [MoveList],
-    budget: &mut Budget,
-    table: &TranspositionTable,
-    seen: &mut Vec<u64>,
-) -> (Option<Move>, Score) {
-    budget.visit();
-    let hash = position.hash();
-    let hint = table.probe(hash).map_or(Move::NULL, |e| e.best());
-    let (list, deeper) = lists.split_first_mut().unwrap();
-    generate_all::<Us>(position, list);
-    list.score(position, hint);
+impl Searcher<'_> {
+    fn root<Us: Side>(
+        &mut self,
+        position: &mut Position,
+        depth: u32,
+    ) -> (Option<Move>, Score) {
+        self.visit();
+        let hash = position.hash();
+        let hint = self.table.probe(hash).map_or(Move::NULL, |e| e.best());
+        generate_all::<Us>(position, &mut self.lists[0]);
+        self.lists[0].score(position, hint);
 
-    let mut best = None;
-    let mut alpha = -MATE;
+        let mut best = None;
+        let mut alpha = -MATE;
 
-    seen.push(hash);
-    for index in 0..list.len() {
-        let mv = list.pick(index);
-        let undo = position.make_move(mv);
-        let score =
-            -negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha, deeper, budget, table, seen);
-        position.unmake_move(mv, undo);
-        if score > alpha {
-            (best, alpha) = (Some(mv), score);
-        }
-        if budget.stopped {
-            break;
-        }
-    }
-    seen.pop();
-
-    if !budget.stopped && best.is_some() {
-        table.store(hash, best, alpha, depth, 0, Flag::Exact);
-    }
-    (best, alpha)
-}
-
-/// alpha-beta search
-fn negamax<Us: Side>(
-    position: &mut Position,
-    depth: u32,
-    ply: u32,
-    mut alpha: Score,
-    beta: Score,
-    lists: &mut [MoveList],
-    budget: &mut Budget,
-    table: &TranspositionTable,
-    seen: &mut Vec<u64>,
-) -> Score {
-    budget.visit();
-    if depth == 0 {
-        return quiescence::<Us>(position, alpha, beta, lists, budget);
-    }
-
-    // A draw at the horizon is missed, the node above it catches the line.
-    let halfmove_clock = position.halfmove_clock();
-    let hash = position.hash();
-    if halfmove_clock >= 100 || halfmove_clock >= 4 && repeats(seen, hash, halfmove_clock) {
-        return 0;
-    }
-
-    if budget.stopped {
-        return 0;
-    }
-
-    let tt_entry = table.probe(hash);
-    if let Some(entry) = tt_entry {
-        if entry.depth() >= depth {
-            let score = entry.score(ply);
-            match entry.flag() {
-                Flag::Exact => return score,
-                Flag::Lower if score >= beta => return score,
-                Flag::Upper if score <= alpha => return score,
-                _ => {}
+        self.seen.push(hash);
+        for index in 0..self.lists[0].len() {
+            let mv = self.lists[0].pick(index);
+            let undo = position.make_move(mv);
+            let score = -self.negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha);
+            position.unmake_move(mv, undo);
+            if score > alpha {
+                (best, alpha) = (Some(mv), score);
+            }
+            if self.stopped {
+                break;
             }
         }
+        self.seen.pop();
+
+        if !self.stopped && best.is_some() {
+            self.table.store(hash, best, alpha, depth, 0, Flag::Exact);
+        }
+        (best, alpha)
     }
 
-    // Every ply keeps its own movelist
-    let (list, deeper) = lists.split_first_mut().unwrap();
-    let in_check = generate_all::<Us>(position, list);
-    if list.is_empty() {
-        return if in_check { ply as Score - MATE } else { 0 };
-    }
+    /// alpha-beta search
+    fn negamax<Us: Side>(
+        &mut self,
+        position: &mut Position,
+        depth: u32,
+        ply: u32,
+        mut alpha: Score,
+        beta: Score,
+    ) -> Score {
+        self.visit();
+        if depth == 0 {
+            return self.quiescence::<Us>(position, alpha, beta, ply);
+        }
 
-    let tt_move = tt_entry.map_or(Move::NULL, |e| e.best());
-    list.score(position, tt_move);
+        // A draw at the horizon is missed, the node above it catches the line.
+        let halfmove_clock = position.halfmove_clock();
+        let hash = position.hash();
+        if halfmove_clock >= 100
+            || halfmove_clock >= 4 && repeats(&self.seen, hash, halfmove_clock)
+        {
+            return 0;
+        }
 
-    let alpha_orig = alpha;
-    let mut best_move = None;
+        if self.stopped {
+            return 0;
+        }
 
-    seen.push(hash);
-    for index in 0..list.len() {
-        let mv = list.pick(index);
-        let undo = position.make_move(mv);
-        let score = -negamax::<Us::Them>(
-            position,
-            depth - 1,
-            ply + 1,
-            -beta,
-            -alpha,
-            deeper,
-            budget,
-            table,
-            seen,
-        );
-        position.unmake_move(mv, undo);
-        if score >= beta {
-            seen.pop();
-            if !budget.stopped {
-                table.store(hash, Some(mv), score, depth, ply, Flag::Lower);
+        let tt_entry = self.table.probe(hash);
+        if let Some(entry) = tt_entry {
+            if entry.depth() >= depth {
+                let score = entry.score(ply);
+                match entry.flag() {
+                    Flag::Exact => return score,
+                    Flag::Lower if score >= beta => return score,
+                    Flag::Upper if score <= alpha => return score,
+                    _ => {}
+                }
             }
+        }
+
+        // Every ply keeps its own movelist
+        let here = ply as usize;
+        let in_check = generate_all::<Us>(position, &mut self.lists[here]);
+        if self.lists[here].is_empty() {
+            return if in_check { ply as Score - MATE } else { 0 };
+        }
+
+        let tt_move = tt_entry.map_or(Move::NULL, |e| e.best());
+        self.lists[here].score(position, tt_move);
+
+        let alpha_orig = alpha;
+        let mut best_move = None;
+
+        self.seen.push(hash);
+        for index in 0..self.lists[here].len() {
+            let mv = self.lists[here].pick(index);
+            let undo = position.make_move(mv);
+            let score = -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha);
+            position.unmake_move(mv, undo);
+            if score >= beta {
+                self.seen.pop();
+                if !self.stopped {
+                    self.table.store(hash, Some(mv), score, depth, ply, Flag::Lower);
+                }
+                return beta;
+            }
+            if score > alpha {
+                alpha = score;
+                best_move = Some(mv);
+            }
+        }
+        self.seen.pop();
+
+        if !self.stopped {
+            let flag = if alpha > alpha_orig { Flag::Exact } else { Flag::Upper };
+            self.table.store(hash, best_move, alpha, depth, ply, flag);
+        }
+        alpha
+    }
+
+    /// Plays out the captures so the leaf is not evaluated mid trade.
+    fn quiescence<Us: Side>(
+        &mut self,
+        position: &mut Position,
+        mut alpha: Score,
+        beta: Score,
+        ply: u32,
+    ) -> Score {
+        self.visit();
+        let stand_pat = evaluate(position);
+        if stand_pat >= beta {
             return beta;
         }
-        if score > alpha {
-            alpha = score;
-            best_move = Some(mv);
+        if stand_pat > alpha {
+            alpha = stand_pat;
         }
-    }
-    seen.pop();
 
-    if !budget.stopped {
-        let flag = if alpha > alpha_orig { Flag::Exact } else { Flag::Upper };
-        table.store(hash, best_move, alpha, depth, ply, flag);
-    }
-    alpha
-}
-
-/// Plays out the captures so the leaf is not evaluated mid trade.
-fn quiescence<Us: Side>(
-    position: &mut Position,
-    mut alpha: Score,
-    beta: Score,
-    lists: &mut [MoveList],
-    budget: &mut Budget,
-) -> Score {
-    budget.visit();
-    let stand_pat = evaluate(position);
-    if stand_pat >= beta {
-        return beta;
-    }
-    if stand_pat > alpha {
-        alpha = stand_pat;
-    }
-
-    let Some((list, deeper)) = lists.split_first_mut() else {
-        return alpha;
-    };
-    if budget.stopped {
-        return alpha;
-    }
-
-    let masks = check_masks::<Us>(position);
-    list.clear();
-    generate::<Us, true, false>(position, &masks, list);
-    list.score(position, Move::NULL);
-
-    for index in 0..list.len() {
-        let mv = list.pick(index);
-        let undo = position.make_move(mv);
-        let score = -quiescence::<Us::Them>(position, -beta, -alpha, deeper, budget);
-        position.unmake_move(mv, undo);
-        if score >= beta {
-            return beta;
+        let here = ply as usize;
+        if here >= self.lists.len() || self.stopped {
+            return alpha;
         }
-        if score > alpha {
-            alpha = score;
+
+        let masks = check_masks::<Us>(position);
+        self.lists[here].clear();
+        generate::<Us, true, false>(position, &masks, &mut self.lists[here]);
+        self.lists[here].score(position, Move::NULL);
+
+        for index in 0..self.lists[here].len() {
+            let mv = self.lists[here].pick(index);
+            let undo = position.make_move(mv);
+            let score = -self.quiescence::<Us::Them>(position, -beta, -alpha, ply + 1);
+            position.unmake_move(mv, undo);
+            if score >= beta {
+                return beta;
+            }
+            if score > alpha {
+                alpha = score;
+            }
         }
+        alpha
     }
-    alpha
 }
