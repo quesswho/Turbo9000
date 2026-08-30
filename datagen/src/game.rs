@@ -78,6 +78,7 @@ pub fn play(
     }
 
     let start = records.len();
+    let mut movers = Vec::new();
     let outcome = loop {
         let in_check = legal(&position, &mut list);
         if list.is_empty() {
@@ -102,13 +103,14 @@ pub fn play(
         let quiet = !in_check && !mv.is_capture() && !mv.is_promotion();
         if quiet && report.score.abs() < MATE - MAX_MATE_PLIES {
             records.push(pack(&position, report.score));
+            movers.push(position.side_to_move().is_white());
         }
 
         history.push(position.hash());
         position.make_move(mv);
     };
 
-    for record in &mut records[start..] {
-        set_outcome(record, outcome);
+    for (record, &white) in records[start..].iter_mut().zip(&movers) {
+        set_outcome(record, outcome, white);
     }
 }

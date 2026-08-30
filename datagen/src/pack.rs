@@ -1,8 +1,8 @@
-use engine::position::{Black, Piece, Position, Side, White};
+use engine::position::{BitBoard, Piece, Position, Square};
 use engine::search::Score;
 
 /// One `bulletformat::ChessBoard`: `occ`, `pcs`, `score`, `result`, `ksq`,
-/// `opp_ksq`, `extra`, laid out little endian and white relative.
+/// `opp_ksq`, `extra`, laid out little endian and side to move relative.
 pub const RECORD: usize = 32;
 
 const RESULT: usize = 26;
@@ -23,18 +23,32 @@ const KINDS: [Piece; Piece::COUNT] = [
     Piece::King,
 ];
 
+/// Black to move is stored mirrored, so the mover always faces up the board.
+fn orient(board: BitBoard, flip: bool) -> BitBoard {
+    if flip { board.swap_bytes() } else { board }
+}
+
+fn orient_square(square: Square, flip: bool) -> Square {
+    if flip { square ^ 56 } else { square }
+}
+
 /// The result is left as a placeholder, it is only known once the game ends.
 pub fn pack(position: &Position, score: Score) -> [u8; RECORD] {
-    let mut record = [0; RECORD];
-    record[..8].copy_from_slice(&position.occupied().to_le_bytes());
+    let us = position.side_to_move();
+    let flip = !us.is_white();
 
-    let black = position.color(Black::COLOR);
-    let mut occupied = position.occupied();
+    let mut record = [0; RECORD];
+    let occupied = orient(position.occupied(), flip);
+    record[..8].copy_from_slice(&occupied.to_le_bytes());
+
+    let opponent = position.color(us.flip());
+    let mut bits = occupied;
     let mut index = 0;
-    while occupied != 0 {
-        let bit = occupied & occupied.wrapping_neg();
-        occupied &= occupied - 1;
-        let color = u8::from(bit & black != 0) << 3;
+    while bits != 0 {
+        let square = bits.trailing_zeros() as Square;
+        bits &= bits - 1;
+        let bit = 1 << orient_square(square, flip);
+        let color = u8::from(bit & opponent != 0) << 3;
         let kind = KINDS
             .iter()
             .position(|&piece| position.pieces_of_kind(piece) & bit != 0)
@@ -43,21 +57,21 @@ pub fn pack(position: &Position, score: Score) -> [u8; RECORD] {
         index += 1;
     }
 
-    let white = if position.side_to_move().is_white() { score } else { -score };
-    record[24..26].copy_from_slice(&(white as i16).to_le_bytes());
-    record[27] = position.king_square(White::COLOR);
-    record[28] = position.king_square(Black::COLOR) ^ 56;
+    record[24..26].copy_from_slice(&(score as i16).to_le_bytes());
+    record[27] = orient_square(position.king_square(us), flip);
+    record[28] = orient_square(position.king_square(us.flip()), flip) ^ 56;
     record
 }
 
-pub fn set_outcome(record: &mut [u8; RECORD], outcome: Outcome) {
-    record[RESULT] = outcome as u8;
+/// `outcome` is white relative, the record stores it for the side to move.
+pub fn set_outcome(record: &mut [u8; RECORD], outcome: Outcome, white_to_move: bool) {
+    let result = outcome as u8;
+    record[RESULT] = if white_to_move { result } else { 2 - result };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::position::Square;
 
     fn nibbles(record: &[u8; RECORD]) -> Vec<(Square, u8)> {
         let occupied = u64::from_le_bytes(record[..8].try_into().expect("eight bytes"));
@@ -76,32 +90,38 @@ mod tests {
     fn round_trip(fen: &str, score: Score) {
         let position: Position = fen.parse().expect("bad fen");
         let record = pack(&position, score);
+        let us = position.side_to_move();
+        let flip = !us.is_white();
 
         assert_eq!(
             u64::from_le_bytes(record[..8].try_into().expect("eight bytes")),
-            position.occupied(),
+            orient(position.occupied(), flip),
             "{fen}"
         );
 
         let squares = nibbles(&record);
         assert_eq!(squares.len() as u32, position.occupied().count_ones(), "{fen}");
         for (square, nibble) in squares {
-            let color = if nibble & 8 != 0 { Black::COLOR } else { White::COLOR };
+            let color = if nibble & 8 != 0 { us.flip() } else { us };
             let piece = KINDS[(nibble & 7) as usize];
+            let origin = orient_square(square, flip);
             assert!(
-                position.pieces(piece, color) & (1u64 << square) != 0,
+                position.pieces(piece, color) & (1 << origin) != 0,
                 "{fen}: square {square} decoded as {nibble}"
             );
         }
 
-        let white = if position.side_to_move().is_white() { score } else { -score };
         assert_eq!(
             i16::from_le_bytes(record[24..26].try_into().expect("two bytes")),
-            white as i16,
+            score as i16,
             "{fen}"
         );
-        assert_eq!(record[27], position.king_square(White::COLOR), "{fen}");
-        assert_eq!(record[28], position.king_square(Black::COLOR) ^ 56, "{fen}");
+        assert_eq!(record[27], orient_square(position.king_square(us), flip), "{fen}");
+        assert_eq!(
+            record[28],
+            orient_square(position.king_square(us.flip()), flip) ^ 56,
+            "{fen}"
+        );
     }
 
     #[test]
@@ -126,27 +146,35 @@ mod tests {
         round_trip(FEN, -45);
     }
 
-    /// The record is white relative, so black's score changes sign.
     #[test]
-    fn black_to_move_flips_the_score() {
-        let position: Position = "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 b - - 0 1"
+    fn a_black_to_move_position_round_trips() {
+        round_trip("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 b - - 0 1", 50);
+    }
+
+    /// The record is mover relative, so a position and its mirror with the
+    /// colours swapped pack to the same bytes.
+    #[test]
+    fn black_to_move_packs_as_its_mirror() {
+        let black: Position = "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 b - - 0 1"
             .parse()
             .expect("bad fen");
-        let record = pack(&position, 50);
-        assert_eq!(
-            i16::from_le_bytes(record[24..26].try_into().expect("two bytes")),
-            -50
-        );
+        let white: Position = "8/4p1p1/8/1r3P1K/kp5R/3P4/2P5/8 w - - 0 1"
+            .parse()
+            .expect("bad fen");
+        assert_eq!(pack(&black, 50), pack(&white, 50));
     }
 
     #[test]
-    fn the_outcome_lands_in_its_own_byte() {
+    fn the_outcome_is_stored_for_the_mover() {
         let position = Position::starting();
         let mut record = pack(&position, 0);
         assert_eq!(record[RESULT], 0);
-        set_outcome(&mut record, Outcome::WhiteWin);
+
+        set_outcome(&mut record, Outcome::WhiteWin, true);
         assert_eq!(record[RESULT], 2);
-        set_outcome(&mut record, Outcome::Draw);
+        set_outcome(&mut record, Outcome::WhiteWin, false);
+        assert_eq!(record[RESULT], 0);
+        set_outcome(&mut record, Outcome::Draw, false);
         assert_eq!(record[RESULT], 1);
     }
 }
