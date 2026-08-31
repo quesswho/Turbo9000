@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::eval::{evaluate};
+use crate::nnue::evaluate;
 use crate::movegen::{check_masks, generate, generate_all, MoveList};
 use crate::moves::Move;
 use crate::position::{Black, Position, Side, White};
