@@ -24,6 +24,15 @@ const QUIESCENCE_DEPTH: usize = 8;
 /// Ranks every quiet move at zero, for the nodes that order without history.
 const EMPTY_HISTORY: [[i32; 64]; 64] = [[0; 64]; 64];
 
+const LMR_MIN_DEPTH: u32 = 3;
+const LMR_MIN_MOVES: usize = 3;
+
+/// How much to shave off a late quiet move.
+fn reduction(depth: u32, index: usize) -> u32 {
+    let late = (index - LMR_MIN_MOVES) as u32;
+    (1 + (depth - LMR_MIN_DEPTH) / 6 + late / 8).min(depth - 2)
+}
+
 #[derive(Clone)]
 pub struct Limits {
     depth: u32,
@@ -285,13 +294,32 @@ impl Searcher<'_> {
             let mv = self.lists[here].pick(index);
             let undo = position.make_move(mv);
             // Ordering makes the first move the likely best, so it is worth a
-            // full window. Every later move is expected to fail low, and a null
-            // window proves that far cheaper. Only a move that beats alpha is
-            // searched again for its real score.
+            // full window.
             let mut score = if index == 0 {
                 -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha)
             } else {
-                -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -alpha - 1, -alpha)
+                let cut = if depth >= LMR_MIN_DEPTH
+                    && index >= LMR_MIN_MOVES
+                    && !in_check
+                    && !mv.is_capture()
+                    && !mv.is_promotion()
+                {
+                    reduction(depth, index)
+                } else {
+                    0
+                };
+                let shallow = -self.negamax::<Us::Them>(
+                    position,
+                    depth - 1 - cut,
+                    ply + 1,
+                    -alpha - 1,
+                    -alpha,
+                );
+                if cut > 0 && shallow > alpha {
+                    -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -alpha - 1, -alpha)
+                } else {
+                    shallow
+                }
             };
             if index > 0 && score > alpha && score < beta {
                 score = -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha);
