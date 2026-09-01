@@ -24,6 +24,12 @@ const QUIESCENCE_DEPTH: usize = 8;
 /// Ranks every quiet move at zero, for the nodes that order without history.
 const EMPTY_HISTORY: [[i32; 64]; 64] = [[0; 64]; 64];
 
+/// Half width of the window opened around the previous iteration's score.
+const ASPIRATION_DELTA: Score = 25;
+
+/// Below this depth the previous score is too rough to narrow the window with.
+const ASPIRATION_MIN_DEPTH: u32 = 6;
+
 const LMR_MIN_DEPTH: u32 = 3;
 const LMR_MIN_MOVES: usize = 3;
 
@@ -166,9 +172,9 @@ pub fn search(
     let mut completed = 0;
     for iteration in 1..=limits.depth {
         let (found, found_score) = if position.side_to_move().is_white() {
-            searcher.root::<White>(position, iteration)
+            searcher.aspiration::<White>(position, iteration, score)
         } else {
-            searcher.root::<Black>(position, iteration)
+            searcher.aspiration::<Black>(position, iteration, score)
         };
 
         if searcher.stopped {
@@ -188,10 +194,43 @@ pub fn search(
 }
 
 impl Searcher<'_> {
+    /// Widens the side the score escaped from until it lands inside the window.
+    fn aspiration<Us: Side>(
+        &mut self,
+        position: &mut Position,
+        depth: u32,
+        previous: Score,
+    ) -> (Option<Move>, Score) {
+        if depth < ASPIRATION_MIN_DEPTH {
+            return self.root::<Us>(position, depth, -MATE, MATE);
+        }
+
+        let mut delta = ASPIRATION_DELTA;
+        let mut alpha = (previous - delta).max(-MATE);
+        let mut beta = (previous + delta).min(MATE);
+        loop {
+            let (best, score) = self.root::<Us>(position, depth, alpha, beta);
+            if self.stopped {
+                return (best, score);
+            }
+            // A bound already at the mate score cannot widen.
+            if score <= alpha && alpha > -MATE {
+                alpha = (score - delta).max(-MATE);
+            } else if score >= beta && beta < MATE {
+                beta = (score + delta).min(MATE);
+            } else {
+                return (best, score);
+            }
+            delta *= 2;
+        }
+    }
+
     fn root<Us: Side>(
         &mut self,
         position: &mut Position,
         depth: u32,
+        mut alpha: Score,
+        beta: Score,
     ) -> (Option<Move>, Score) {
         self.visit();
         let hash = position.hash();
@@ -202,23 +241,25 @@ impl Searcher<'_> {
         self.lists[0].score(position, hint, killers, &self.history[side]);
 
         let mut best = None;
-        let mut alpha = -MATE;
 
         self.seen.push(hash);
         for index in 0..self.lists[0].len() {
             let mv = self.lists[0].pick(index);
             let undo = position.make_move(mv);
             let mut score = if index == 0 {
-                -self.negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha)
+                -self.negamax::<Us::Them>(position, depth - 1, 1, -beta, -alpha)
             } else {
                 -self.negamax::<Us::Them>(position, depth - 1, 1, -alpha - 1, -alpha)
             };
-            if index > 0 && score > alpha {
-                score = -self.negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha);
+            if index > 0 && score > alpha && score < beta {
+                score = -self.negamax::<Us::Them>(position, depth - 1, 1, -beta, -alpha);
             }
             position.unmake_move(mv, undo);
             if score > alpha {
                 (best, alpha) = (Some(mv), score);
+                if alpha >= beta {
+                    break;
+                }
             }
             if self.stopped {
                 break;
@@ -226,8 +267,10 @@ impl Searcher<'_> {
         }
         self.seen.pop();
 
+        // A fail low leaves `best` unset, keeping the previous iteration's hint.
         if !self.stopped && best.is_some() {
-            self.table.store(hash, best, alpha, depth, 0, Flag::Exact);
+            let flag = if alpha >= beta { Flag::Lower } else { Flag::Exact };
+            self.table.store(hash, best, alpha, depth, 0, flag);
         }
         (best, alpha)
     }
