@@ -8,6 +8,5 @@ pub mod ttable;
 
 pub const NAME: &str = "Turbo9000";
 
-mod eval;
 mod lookup;
 mod zobrist;
