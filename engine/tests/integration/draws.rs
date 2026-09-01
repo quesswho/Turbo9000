@@ -11,6 +11,14 @@ fn the_fifty_move_rule_draws_an_expired_position() {
     assert_eq!(score_of("8/8/8/4k3/8/8/4K3/4R3 w - - 99 60", 4), 0);
 }
 
+/// A rook up and the clock not yet spent should still read as a win. The
+/// search does not yet score it over 300 at depth four, so this fails until
+/// the evaluation improves.
+#[test]
+fn a_rook_up_inside_the_clock_is_still_winning() {
+    assert!(score_of("8/8/8/4k3/8/8/4K3/4R3 w - - 0 60", 4) > 300);
+}
+
 /// After the shuffle white is a queen down with `Ka1b1` as its only legal
 /// move, and that move returns to a position already played. Salvaging the
 /// draw depends on seeing the repetition, so the score is 0 and not -900.
