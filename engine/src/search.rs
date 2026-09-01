@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -7,7 +7,6 @@ use crate::movegen::{check_masks, generate, generate_all, MoveList, HISTORY_MAX}
 use crate::moves::Move;
 use crate::position::{Black, Color, Position, Side, White};
 use crate::ttable::{Flag, TranspositionTable};
-use crate::zobrist::splitmix64;
 
 pub type Score = i32;
 
@@ -65,18 +64,6 @@ impl Limits {
     }
 }
 
-/// Successive searches draw different seeds, so a position that comes round
-/// again is not answered with the same move.
-static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-struct Rng(u64);
-
-impl Rng {
-    fn below(&mut self, bound: usize) -> usize {
-        (splitmix64(&mut self.0) % bound as u64) as usize
-    }
-}
-
 /// Per thread budget
 struct Searcher<'a> {
     table: &'a TranspositionTable,
@@ -84,7 +71,6 @@ struct Searcher<'a> {
     killers: Vec<[Move; 2]>,
     history: Vec<[[i32; 64]; 64]>,
     seen: Vec<u64>,
-    rng: Rng,
     nodes: u64,
     deadline: Option<Instant>,
     stop: Option<Arc<AtomicBool>>,
@@ -160,7 +146,6 @@ pub fn search(
         killers: vec![[Move::NULL; 2]; limits.depth as usize + QUIESCENCE_DEPTH],
         history: vec![[[0; 64]; 64]; Color::COUNT],
         seen,
-        rng: Rng(position.hash() ^ SEQUENCE.fetch_add(1, Ordering::Relaxed)),
         nodes: 0,
         deadline: limits.deadline,
         stop: limits.stop,
@@ -201,15 +186,11 @@ impl Searcher<'_> {
     ) -> (Option<Move>, Score) {
         self.visit();
         let hash = position.hash();
+        let hint = self.table.probe(hash).map_or(Move::NULL, |e| e.best());
         generate_all::<Us>(position, &mut self.lists[0]);
-        
-        for index in (1..self.lists[0].len()).rev() {
-            let other = self.rng.below(index + 1);
-            self.lists[0].moves_mut().swap(index, other);
-        }
-        // No transposition hint at the root. It would outrank the shuffle and
-        // answer a position the game has already visited with the same move.
-        self.lists[0].score(position, Move::NULL, [Move::NULL; 2], &EMPTY_HISTORY);
+        let killers = self.killers[0];
+        let side = position.side_to_move().index();
+        self.lists[0].score(position, hint, killers, &self.history[side]);
 
         let mut best = None;
         let mut alpha = -MATE;
