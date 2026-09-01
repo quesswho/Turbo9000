@@ -404,7 +404,3 @@ pub fn rook_attacks(from: Square, occupied: BitBoard) -> BitBoard {
 pub fn bishop_attacks(from: Square, occupied: BitBoard) -> BitBoard {
     ATTACKS[BISHOP_MAGICS[from as usize].index(occupied, BISHOP_SHIFT)]
 }
-
-pub fn queen_attacks(from: Square, occupied: BitBoard) -> BitBoard {
-    rook_attacks(from, occupied) | bishop_attacks(from, occupied)
-}

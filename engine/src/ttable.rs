@@ -42,8 +42,6 @@ impl Flag {
 pub struct Entry(u64);
 
 impl Entry {
-    const EMPTY: Entry = Entry(0);
-
     fn pack(key: u16, best: Move, score: i16, depth: u8, flag: u8) -> Self {
         let bits = (key as u64)
             | ((best.to_bits() as u64) << 16)
