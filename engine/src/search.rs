@@ -1,12 +1,13 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::eval::{evaluate};
+use crate::nnue::evaluate;
 use crate::movegen::{check_masks, generate, generate_all, MoveList};
 use crate::moves::Move;
 use crate::position::{Black, Position, Side, White};
 use crate::ttable::{Flag, TranspositionTable};
+use crate::zobrist::splitmix64;
 
 pub type Score = i32;
 
@@ -61,11 +62,24 @@ impl Limits {
     }
 }
 
+/// Successive searches draw different seeds, so a position that comes round
+/// again is not answered with the same move.
+static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct Rng(u64);
+
+impl Rng {
+    fn below(&mut self, bound: usize) -> usize {
+        (splitmix64(&mut self.0) % bound as u64) as usize
+    }
+}
+
 /// Per thread budget
 struct Searcher<'a> {
     table: &'a TranspositionTable,
     lists: Vec<MoveList>,
     seen: Vec<u64>,
+    rng: Rng,
     nodes: u64,
     deadline: Option<Instant>,
     stop: Option<Arc<AtomicBool>>,
@@ -120,6 +134,7 @@ pub fn search(
         table,
         lists: vec![MoveList::new(); limits.depth as usize + QUIESCENCE_DEPTH],
         seen,
+        rng: Rng(position.hash() ^ SEQUENCE.fetch_add(1, Ordering::Relaxed)),
         nodes: 0,
         deadline: limits.deadline,
         stop: limits.stop,
@@ -160,9 +175,17 @@ impl Searcher<'_> {
     ) -> (Option<Move>, Score) {
         self.visit();
         let hash = position.hash();
-        let hint = self.table.probe(hash).map_or(Move::NULL, |e| e.best());
         generate_all::<Us>(position, &mut self.lists[0]);
-        self.lists[0].score(position, hint);
+        // Material alone ties every quiet move, and `pick` keeps the first of
+        // an equal ranked run, so a shuffle here is what stops the search
+        // answering a repeated position with the move that repeats it.
+        for index in (1..self.lists[0].len()).rev() {
+            let other = self.rng.below(index + 1);
+            self.lists[0].moves_mut().swap(index, other);
+        }
+        // No transposition hint at the root. It would outrank the shuffle and
+        // answer a position the game has already visited with the same move.
+        self.lists[0].score(position, Move::NULL);
 
         let mut best = None;
         let mut alpha = -MATE;

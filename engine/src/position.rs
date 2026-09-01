@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::moves::Move;
+use crate::nnue::Accumulator;
 use crate::zobrist;
 
 /// One bit per square, indexed little-endian rank-file: bit 0 is A1, bit 63 is H8.
@@ -259,6 +260,7 @@ pub struct Position {
     en_passant: Square,
     halfmove_clock: u8,
     hash: u64,
+    accumulator: Accumulator,
 }
 
 /// Undo state returned by `make_move` and passed back to
@@ -284,6 +286,7 @@ impl Position {
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
             hash: 0,
+            accumulator: Accumulator::EMPTY,
         }
     }
 
@@ -325,9 +328,11 @@ impl Position {
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
             hash: 0,
+            accumulator: Accumulator::EMPTY,
         };
         position.rebuild_mailbox();
         position.hash = position.compute_hash();
+        position.refresh_accumulator();
         position
     }
 
@@ -440,6 +445,21 @@ impl Position {
         self.hash
     }
 
+    pub const fn accumulator(&self) -> &Accumulator {
+        &self.accumulator
+    }
+
+    /// Needed only after setting the piece boards directly, as `starting` does.
+    pub fn refresh_accumulator(&mut self) {
+        self.accumulator = Accumulator::EMPTY;
+        let mut occupied = self.occupied;
+        while occupied != EMPTY {
+            let square = pop_square(&mut occupied);
+            let colored = self.mailbox[square as usize].expect("occupied square without a piece");
+            self.accumulator.add(colored.piece(), colored.color(), square);
+        }
+    }
+
     pub fn compute_hash(&self) -> u64 {
         let mut hash = EMPTY;
         let mut occupied = self.occupied;
@@ -487,6 +507,7 @@ impl Position {
         self.occupied |= mask;
         self.mailbox[square as usize] = Some(colored);
         self.hash ^= zobrist::piece_key(colored, square);
+        self.accumulator.add(piece, color, square);
     }
 
     /// The piece and color must match what stands on the square.
@@ -498,6 +519,7 @@ impl Position {
         self.occupied &= mask;
         self.mailbox[square as usize] = None;
         self.hash ^= zobrist::piece_key(ColoredPiece::new(piece, color), square);
+        self.accumulator.remove(piece, color, square);
     }
 
     pub fn move_piece(&mut self, from: Square, to: Square, piece: Piece, color: Color) {
@@ -511,6 +533,8 @@ impl Position {
         self.mailbox[from as usize] = None;
         self.mailbox[to as usize] = Some(colored);
         self.hash ^= zobrist::piece_key(colored, from) ^ zobrist::piece_key(colored, to);
+        self.accumulator.remove(piece, color, from);
+        self.accumulator.add(piece, color, to);
     }
 
     /// Applies a move without checking legality, returning what it destroyed.

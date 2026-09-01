@@ -1,5 +1,6 @@
 pub mod movegen;
 pub mod moves;
+pub mod nnue;
 pub mod perft;
 pub mod position;
 pub mod search;
