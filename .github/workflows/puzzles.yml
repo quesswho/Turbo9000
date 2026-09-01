@@ -1,0 +1,21 @@
+name: puzzles
+on:
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: solve
+        run: |
+          set -o pipefail
+          cargo test -p engine --release --test puzzles -- --ignored --nocapture 2>&1 | tee puzzles.log
+      - name: summary
+        run: cat puzzles.log >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: puzzles-log
+          path: puzzles.log
+          retention-days: 30
