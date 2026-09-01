@@ -270,6 +270,8 @@ impl Searcher<'_> {
 
         let alpha_orig = alpha;
         let mut best_move = None;
+        // The list is not empty, so some move always beats this.
+        let mut best_score = -MATE;
 
         self.seen.push(hash);
         for index in 0..self.lists[here].len() {
@@ -277,29 +279,32 @@ impl Searcher<'_> {
             let undo = position.make_move(mv);
             let score = -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha);
             position.unmake_move(mv, undo);
-            if score >= beta {
-                self.seen.pop();
-                if !mv.is_capture() && !mv.is_promotion() {
-                    self.remember_killer(mv, here);
-                    self.reward_history(mv, position.side_to_move().index(), depth);
+            if score > best_score {
+                best_score = score;
+                if score > alpha {
+                    alpha = score;
+                    best_move = Some(mv);
                 }
-                if !self.stopped {
-                    self.table.store(hash, Some(mv), score, depth, ply, Flag::Lower);
+                if alpha >= beta {
+                    self.seen.pop();
+                    if !mv.is_capture() && !mv.is_promotion() {
+                        self.remember_killer(mv, here);
+                        self.reward_history(mv, position.side_to_move().index(), depth);
+                    }
+                    if !self.stopped {
+                        self.table.store(hash, Some(mv), best_score, depth, ply, Flag::Lower);
+                    }
+                    return best_score;
                 }
-                return beta;
-            }
-            if score > alpha {
-                alpha = score;
-                best_move = Some(mv);
             }
         }
         self.seen.pop();
 
         if !self.stopped {
             let flag = if alpha > alpha_orig { Flag::Exact } else { Flag::Upper };
-            self.table.store(hash, best_move, alpha, depth, ply, flag);
+            self.table.store(hash, best_move, best_score, depth, ply, flag);
         }
-        alpha
+        best_score
     }
 
     /// Plays out the captures so the leaf is not evaluated mid trade.
@@ -313,15 +318,17 @@ impl Searcher<'_> {
         self.visit();
         let stand_pat = evaluate(position);
         if stand_pat >= beta {
-            return beta;
+            return stand_pat;
         }
         if stand_pat > alpha {
             alpha = stand_pat;
         }
 
+        // Standing pat is a floor: the side to move need not enter a capture.
+        let mut best_score = stand_pat;
         let here = ply as usize;
         if here >= self.lists.len() || self.stopped {
-            return alpha;
+            return best_score;
         }
 
         let masks = check_masks::<Us>(position);
@@ -334,13 +341,16 @@ impl Searcher<'_> {
             let undo = position.make_move(mv);
             let score = -self.quiescence::<Us::Them>(position, -beta, -alpha, ply + 1);
             position.unmake_move(mv, undo);
-            if score >= beta {
-                return beta;
-            }
-            if score > alpha {
-                alpha = score;
+            if score > best_score {
+                best_score = score;
+                if score > alpha {
+                    alpha = score;
+                }
+                if alpha >= beta {
+                    return best_score;
+                }
             }
         }
-        alpha
+        best_score
     }
 }
