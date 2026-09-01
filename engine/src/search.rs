@@ -199,7 +199,14 @@ impl Searcher<'_> {
         for index in 0..self.lists[0].len() {
             let mv = self.lists[0].pick(index);
             let undo = position.make_move(mv);
-            let score = -self.negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha);
+            let mut score = if index == 0 {
+                -self.negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha)
+            } else {
+                -self.negamax::<Us::Them>(position, depth - 1, 1, -alpha - 1, -alpha)
+            };
+            if index > 0 && score > alpha {
+                score = -self.negamax::<Us::Them>(position, depth - 1, 1, -MATE, -alpha);
+            }
             position.unmake_move(mv, undo);
             if score > alpha {
                 (best, alpha) = (Some(mv), score);
@@ -277,7 +284,18 @@ impl Searcher<'_> {
         for index in 0..self.lists[here].len() {
             let mv = self.lists[here].pick(index);
             let undo = position.make_move(mv);
-            let score = -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha);
+            // Ordering makes the first move the likely best, so it is worth a
+            // full window. Every later move is expected to fail low, and a null
+            // window proves that far cheaper. Only a move that beats alpha is
+            // searched again for its real score.
+            let mut score = if index == 0 {
+                -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha)
+            } else {
+                -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -alpha - 1, -alpha)
+            };
+            if index > 0 && score > alpha && score < beta {
+                score = -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha);
+            }
             position.unmake_move(mv, undo);
             if score > best_score {
                 best_score = score;
