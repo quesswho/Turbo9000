@@ -4,3 +4,4 @@ books/*
 !books/turbo.epd
 config.json
 .sprt/
+checkpoints/

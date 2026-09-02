@@ -1,0 +1,16 @@
+# Its own workspace, so the root build never compiles the training backend.
+[workspace]
+
+[package]
+name = "trainer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bullet_lib = { git = "https://github.com/quesswho/turbo-trainer", rev = "20c03c5f2d7a0eaa86214bc13a0cc3e36e2297e3", package = "bullet_lib" }
+
+[features]
+cpu = ["bullet_lib/cpu"]
+cuda = ["bullet_lib/cuda"]
+rocm = ["bullet_lib/rocm"]
+metal = ["bullet_lib/metal"]
