@@ -1,7 +1,3 @@
-mod game;
-mod pack;
-mod rng;
-
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,8 +7,8 @@ use std::time::Instant;
 
 use engine::ttable::TranspositionTable;
 
-use crate::game::play;
-use crate::rng::Rng;
+use datagen::game::play;
+use datagen::rng::Rng;
 
 /// Per thread, so the table never has to be shared.
 const TABLE_MB: usize = 8;

@@ -1,5 +1,6 @@
 target/
 *.lock
-books/
+books/*
+!books/turbo.epd
 config.json
 .sprt/

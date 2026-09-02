@@ -445,6 +445,67 @@ impl Position {
         self.halfmove_clock = clock.min(100) as u8;
     }
 
+    /// From position to FEN. A position does not track the fullmove
+    /// number, we always write it as one.
+    pub fn to_fen(&self) -> String {
+        let mut fen = String::new();
+        for rank in (0..8).rev() {
+            let mut empty = 0u8;
+            for file in 0..8 {
+                let Some(colored) = self.piece_at(square(file, rank)) else {
+                    empty += 1;
+                    continue;
+                };
+                if empty > 0 {
+                    fen.push((b'0' + empty) as char);
+                    empty = 0;
+                }
+                let symbol = colored.piece().to_char();
+                fen.push(if colored.color().is_white() {
+                    symbol.to_ascii_uppercase()
+                } else {
+                    symbol
+                });
+            }
+            if empty > 0 {
+                fen.push((b'0' + empty) as char);
+            }
+            if rank > 0 {
+                fen.push('/');
+            }
+        }
+
+        fen.push_str(if self.side_to_move.is_white() { " w " } else { " b " });
+
+        let before = fen.len();
+        for (rights, symbol) in [
+            (CastlingRights::WHITE_KING_SIDE, 'K'),
+            (CastlingRights::WHITE_QUEEN_SIDE, 'Q'),
+            (CastlingRights::BLACK_KING_SIDE, 'k'),
+            (CastlingRights::BLACK_QUEEN_SIDE, 'q'),
+        ] {
+            if self.castling.contains(rights) {
+                fen.push(symbol);
+            }
+        }
+        if fen.len() == before {
+            fen.push('-');
+        }
+
+        fen.push(' ');
+        if self.en_passant == NO_EN_PASSANT {
+            fen.push('-');
+        } else {
+            fen.push((b'a' + file_of(self.en_passant)) as char);
+            fen.push((b'1' + rank_of(self.en_passant)) as char);
+        }
+
+        fen.push(' ');
+        fen.push_str(&self.halfmove_clock.to_string());
+        fen.push_str(" 1");
+        fen
+    }
+
     pub const fn hash(&self) -> u64 {
         self.hash
     }
