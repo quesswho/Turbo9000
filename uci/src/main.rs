@@ -20,9 +20,10 @@ const MAX_MATE_PLIES: Score = 128;
 fn main() {
     let mut position = Position::starting();
     let mut history = Vec::new();
-    let table = Arc::new(TranspositionTable::new(16));
+    let mut table = Arc::new(TranspositionTable::new(16));
     let mut searching = None;
     let stop = Arc::new(AtomicBool::new(false));
+    let mut threads = 1;
 
     for line in io::stdin().lock().lines().map_while(Result::ok) {
         let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -34,9 +35,28 @@ fn main() {
             "uci" => {
                 println!("id name {NAME}");
                 println!("id author adrian-tudev, quesswho");
+                println!("option name Threads type spin default 1 min 1 max 256");
+                println!("option name Hash type spin default 16 min 1 max 1024");
                 println!("uciok");
             }
             "isready" => println!("readyok"),
+            "setoption" => {
+                if let Some((name, value)) = setoption(arguments) {
+                    match name {
+                        "Threads" => {
+                            if let Ok(n) = value.parse() {
+                                threads = n;
+                            }
+                        }
+                        "Hash" => {
+                            if let Ok(mb) = value.parse() {
+                                table = Arc::new(TranspositionTable::new(mb));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             "ucinewgame" => {
                 wait(&mut searching, &stop);
                 position = Position::starting();
@@ -60,6 +80,7 @@ fn main() {
                     }
                     _ => {
                         let limits = parse_limits(arguments, position.side_to_move())
+                            .threads(threads)
                             .stopped_by(Arc::clone(&stop));
                         let table = Arc::clone(&table);
                         searching = Some(go(position.clone(), limits, table, history.clone()));
@@ -142,6 +163,15 @@ fn named(arguments: &[&str], name: &str) -> Option<u64> {
         .windows(2)
         .find(|pair| pair[0] == name)
         .and_then(|pair| pair[1].parse::<u64>().ok())
+}
+
+/// `setoption name <name> value <value>`.
+fn setoption<'a>(arguments: &[&'a str]) -> Option<(&'a str, &'a str)> {
+    if arguments.get(0) == Some(&"name") && arguments.get(2) == Some(&"value") {
+        Some((arguments.get(1)?, arguments.get(3)?))
+    } else {
+        None
+    }
 }
 
 /// How much of the clock one move gets. A flat share plus most of the

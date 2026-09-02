@@ -7,6 +7,7 @@ use crate::movegen::{check_masks, generate, generate_all, MoveList, HISTORY_MAX}
 use crate::moves::Move;
 use crate::position::{Black, Color, Position, Side, White};
 use crate::ttable::{Flag, TranspositionTable};
+use crate::zobrist::splitmix64;
 
 pub type Score = i32;
 
@@ -44,6 +45,7 @@ pub struct Limits {
     depth: u32,
     deadline: Option<Instant>,
     stop: Option<Arc<AtomicBool>>,
+    threads: usize,
 }
 
 impl Limits {
@@ -52,6 +54,7 @@ impl Limits {
             depth,
             deadline: None,
             stop: None,
+            threads: 1,
         }
     }
 
@@ -61,6 +64,7 @@ impl Limits {
             depth: MAX_DEPTH,
             deadline: Some(Instant::now() + span),
             stop: None,
+            threads: 1,
         }
     }
 
@@ -69,12 +73,19 @@ impl Limits {
             depth: MAX_DEPTH,
             deadline: None,
             stop: None,
+            threads: 1,
         }
     }
 
     /// Cut the search short once `flag` is raised.
     pub fn stopped_by(mut self, flag: Arc<AtomicBool>) -> Self {
         self.stop = Some(flag);
+        self
+    }
+
+    /// How many threads share the search of the root position.
+    pub fn threads(mut self, n: usize) -> Self {
+        self.threads = n;
         self
     }
 }
@@ -88,8 +99,12 @@ struct Searcher<'a> {
     seen: Vec<u64>,
     nodes: u64,
     deadline: Option<Instant>,
-    stop: Option<Arc<AtomicBool>>,
+    stop: Arc<AtomicBool>,
     stopped: bool,
+    /// Splitmix64 state feeding the root shuffle of the helper threads.
+    rng: u64,
+    /// Helpers search a shuffled root so they do not replicate the main tree.
+    helper: bool,
 }
 
 impl Searcher<'_> {
@@ -97,11 +112,12 @@ impl Searcher<'_> {
         self.nodes += 1;
         if self.nodes & (CHECK_INTERVAL - 1) == 0 {
             if let Some(deadline) = self.deadline {
-                self.stopped |= Instant::now() >= deadline;
+                if Instant::now() >= deadline {
+                    // One thread's clock is every thread's clock.
+                    self.stop.store(true, Ordering::Relaxed);
+                }
             }
-            if let Some(flag) = &self.stop {
-                self.stopped |= flag.load(Ordering::Relaxed);
-            }
+            self.stopped |= self.stop.load(Ordering::Relaxed);
         }
     }
 }
@@ -146,11 +162,19 @@ fn repeats(seen: &[u64], hash: u64, halfmove_clock: u8) -> bool {
     false
 }
 
-pub fn search(
+/// Uniform draw in `0..bound`, cheap and good enough for the root shuffle.
+fn below(rng: &mut u64, bound: usize) -> usize {
+    (splitmix64(rng) % bound as u64) as usize
+}
+
+/// One thread's share of the iterative deepening, over its own boards.
+fn run(
     position: &mut Position,
     limits: Limits,
+    stop: Arc<AtomicBool>,
     table: &TranspositionTable,
     history: &[u64],
+    index: usize,
 ) -> Report {
     debug_assert!(limits.depth >= 1, "a search shallower than one ply has no move");
     let mut seen = Vec::with_capacity(history.len() + limits.depth as usize + 1);
@@ -163,8 +187,10 @@ pub fn search(
         seen,
         nodes: 0,
         deadline: limits.deadline,
-        stop: limits.stop,
+        stop,
         stopped: false,
+        rng: position.hash() ^ (index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        helper: index > 0,
     };
 
     let mut best = None;
@@ -190,6 +216,52 @@ pub fn search(
         score,
         depth: completed,
         nodes: searcher.nodes,
+    }
+}
+
+pub fn search(
+    position: &mut Position,
+    limits: Limits,
+    table: &TranspositionTable,
+    history: &[u64],
+) -> Report {
+    let stop = limits.stop.clone().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    let threads = limits.threads.max(1);
+    if threads == 1 {
+        return run(position, limits, stop, table, history, 0);
+    }
+
+    let mut reports = Vec::with_capacity(threads);
+    std::thread::scope(|scope| {
+        let mut helpers = Vec::with_capacity(threads - 1);
+        for index in 1..threads {
+            let mut position = position.clone();
+            let limits = limits.clone();
+            let stop = Arc::clone(&stop);
+            helpers.push(scope.spawn(move || {
+                run(&mut position, limits, stop, table, history, index)
+            }));
+        }
+        reports.push(run(position, limits.clone(), Arc::clone(&stop), table, history, 0));
+        // The helpers are only there to warm the table, so the main result
+        // stands and the rest are stopped and joined.
+        stop.store(true, Ordering::Relaxed);
+        for handle in helpers {
+            reports.push(handle.join().expect("a helper panicked"));
+        }
+    });
+
+    let mut best = &reports[0];
+    for report in &reports[1..] {
+        if report.depth > best.depth {
+            best = report;
+        }
+    }
+    Report {
+        best: best.best,
+        score: best.score,
+        depth: best.depth,
+        nodes: reports.iter().map(|report| report.nodes).sum(),
     }
 }
 
@@ -234,8 +306,18 @@ impl Searcher<'_> {
     ) -> (Option<Move>, Score) {
         self.visit();
         let hash = position.hash();
-        let hint = self.table.probe(hash).map_or(Move::NULL, |e| e.best());
         generate_all::<Us>(position, &mut self.lists[0]);
+        let hint = if self.helper {
+            // Helpers search a shuffled root so several threads fill the table
+            // from different directions instead of replicating one tree.
+            for index in (1..self.lists[0].len()).rev() {
+                let other = below(&mut self.rng, index + 1);
+                self.lists[0].moves_mut().swap(index, other);
+            }
+            Move::NULL
+        } else {
+            self.table.probe(hash).map_or(Move::NULL, |e| e.best())
+        };
         let killers = self.killers[0];
         let side = position.side_to_move().index();
         self.lists[0].score(position, hint, killers, &self.history[side]);
