@@ -237,6 +237,10 @@ impl MoveList {
         &self.moves[..self.len]
     }
 
+    pub fn moves_mut(&mut self) -> &mut [Move] {
+        &mut self.moves[..self.len]
+    }
+
     /// A `tt_move` that is not in the list simply never matches.
     pub fn score(
         &mut self,
