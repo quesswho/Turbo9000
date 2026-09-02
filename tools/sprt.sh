@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 sha=$(git rev-parse --short "$1")
 shift
 
-book=${BOOK:-books/8moves_v3.pgn}
+book=${BOOK:-books/turbo.epd}
 baseline=.sprt/bin/$sha
 
 if [ ! -x external/fastchess/fastchess ]; then
@@ -21,7 +21,7 @@ if [ ! -x external/fastchess/fastchess ]; then
 fi
 
 if [ ! -f "$book" ]; then
-    echo "no opening book: scripts/get-book.sh" >&2
+    echo "no opening book: cargo run --release --bin bookgen -- $book 30000" >&2
     exit 1
 fi
 
@@ -39,7 +39,7 @@ exec external/fastchess/fastchess \
     -engine cmd=target/release/turbo9000 name=new \
     -engine cmd="$baseline" name="base-$sha" \
     -each tc="${TC:-8+0.08}" \
-    -openings file="$book" format=pgn order=random \
+    -openings file="$book" format=epd order=random \
     -rounds 100000 -games 2 -repeat \
     -concurrency "${CONCURRENCY:-5}" \
     -sprt elo0="${ELO0:-0}" elo1="${ELO1:-10}" alpha=0.05 beta=0.05 model=normalized \
