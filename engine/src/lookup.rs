@@ -177,6 +177,20 @@ const fn line_squares() -> [[BitBoard; 64]; 64] {
     table
 }
 
+/// Where a slider on an otherwise bare board reaches.
+const fn rays(deltas: &[(i8, i8); 4]) -> [BitBoard; 64] {
+    let mut table = [EMPTY; 64];
+    let mut from = 0;
+    while from < 64 {
+        table[from] = slider_attacks(from as Square, EMPTY, deltas);
+        from += 1;
+    }
+    table
+}
+
+pub static ROOK_RAYS: [BitBoard; 64] = rays(&ROOK_DELTAS);
+pub static BISHOP_RAYS: [BitBoard; 64] = rays(&BISHOP_DELTAS);
+
 pub static BETWEEN: [[BitBoard; 64]; 64] = between_squares();
 pub static LINE: [[BitBoard; 64]; 64] = line_squares();
 

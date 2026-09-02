@@ -44,7 +44,6 @@ pub const NO_CHECK: BitBoard = !EMPTY;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CheckMasks {
-    pub danger: BitBoard,
     pub active: BitBoard,
     pub rook_pin: BitBoard,
     pub bishop_pin: BitBoard,
@@ -83,29 +82,13 @@ pub fn check_masks<Us: Side>(position: &Position) -> CheckMasks {
         | (lookup::rook_attacks(king_square, occupied) & their_rooks)
         | (lookup::bishop_attacks(king_square, occupied) & their_bishops);
 
-    let active = match checkers.count_ones() {
-        0 => NO_CHECK,
-        1 => lookup::BETWEEN[king_square as usize][checkers.trailing_zeros() as usize] | checkers,
-        _ => EMPTY,
+    let active = if checkers == EMPTY {
+        NO_CHECK
+    } else if checkers & (checkers - 1) == EMPTY {
+        lookup::BETWEEN[king_square as usize][checkers.trailing_zeros() as usize] | checkers
+    } else {
+        EMPTY
     };
-
-    // The king does not shield the square behind itself from the piece checking it.
-    let without_king = occupied ^ king;
-    let mut danger = lookup::pawn_attacks::<Us::Them>(their_pawns)
-        | lookup::KING_ATTACKS[position.king_square(them) as usize];
-
-    let mut knights = their_knights;
-    while knights != EMPTY {
-        danger |= lookup::KNIGHT_ATTACKS[pop_square(&mut knights) as usize];
-    }
-    let mut rooks = their_rooks;
-    while rooks != EMPTY {
-        danger |= lookup::rook_attacks(pop_square(&mut rooks), without_king);
-    }
-    let mut bishops = their_bishops;
-    while bishops != EMPTY {
-        danger |= lookup::bishop_attacks(pop_square(&mut bishops), without_king);
-    }
 
     // Snipers are sliders that would reach the king if the board were bare. A
     // single piece of ours in the way is pinned, and the ray is the only place
@@ -116,14 +99,14 @@ pub fn check_masks<Us: Side>(position: &Position) -> CheckMasks {
             let sniper = pop_square(&mut snipers);
             let ray = lookup::BETWEEN[king_square as usize][sniper as usize];
             let blockers = ray & occupied;
-            if blockers.count_ones() == 1 && blockers & ours != EMPTY {
+            if blockers & ours != EMPTY && blockers & (blockers - 1) == EMPTY {
                 mask |= ray | bit(sniper);
             }
         }
         mask
     };
-    let rook_pin = pins(lookup::rook_attacks(king_square, EMPTY) & their_rooks);
-    let bishop_pin = pins(lookup::bishop_attacks(king_square, EMPTY) & their_bishops);
+    let rook_pin = pins(lookup::ROOK_RAYS[king_square as usize] & their_rooks);
+    let bishop_pin = pins(lookup::BISHOP_RAYS[king_square as usize] & their_bishops);
 
     let mut en_passant = if position.en_passant() == NO_EN_PASSANT {
         EMPTY
@@ -163,13 +146,38 @@ pub fn check_masks<Us: Side>(position: &Position) -> CheckMasks {
     };
 
     CheckMasks {
-        danger,
         active,
         rook_pin,
         bishop_pin,
         en_passant,
         en_passant_check,
     }
+}
+
+/// Every square the enemy covers, with our king lifted off the board so that a
+/// slider is not stopped by the very piece it is checking. Walking the enemy
+/// sliders is the most expensive part of generation, so only the king asks for
+/// it, and only when it has somewhere to go.
+fn danger<Us: Side>(position: &Position) -> BitBoard {
+    let them = <Us::Them>::COLOR;
+    let without_king = position.occupied() ^ position.king(Us::COLOR);
+
+    let mut danger = lookup::pawn_attacks::<Us::Them>(position.pawns(them))
+        | lookup::KING_ATTACKS[position.king_square(them) as usize];
+
+    let mut knights = position.knights(them);
+    while knights != EMPTY {
+        danger |= lookup::KNIGHT_ATTACKS[pop_square(&mut knights) as usize];
+    }
+    let mut rooks = position.rooks(them) | position.queens(them);
+    while rooks != EMPTY {
+        danger |= lookup::rook_attacks(pop_square(&mut rooks), without_king);
+    }
+    let mut bishops = position.bishops(them) | position.queens(them);
+    while bishops != EMPTY {
+        danger |= lookup::bishop_attacks(pop_square(&mut bishops), without_king);
+    }
+    danger
 }
 
 pub const MAX_MOVES: usize = 218;
@@ -229,7 +237,6 @@ impl MoveList {
     pub fn push(&mut self, mv: Move) {
         debug_assert!(self.len < MAX_MOVES, "more moves than a position can hold");
         self.moves[self.len] = mv;
-        self.scores[self.len] = 0;
         self.len += 1;
     }
 
@@ -255,13 +262,13 @@ impl MoveList {
     }
 
     /// Swaps the best move from `start` onwards into `start` and returns it.
-    /// Picking on demand beats sorting since most nodes cut off early.
     pub fn pick(&mut self, start: usize) -> Move {
         let scores = &self.scores[start..self.len];
         let mut best = 0;
+        let mut top = scores[0];
         for i in 1..scores.len() {
-            if scores[i] > scores[best] {
-                best = i;
+            if scores[i] > top {
+                (best, top) = (i, scores[i]);
             }
         }
         let best = start + best;
@@ -308,7 +315,7 @@ pub fn generate<Us: Side, const NOISY: bool, const QUIET: bool>(
     masks: &CheckMasks,
     list: &mut MoveList,
 ) {
-    king_moves::<Us, NOISY, QUIET>(position, masks, list);
+    king_moves::<Us, NOISY, QUIET>(position, list);
 
     // Nothing but stepping out of the way answers two checkers at once.
     if masks.double_check() {
@@ -323,12 +330,7 @@ pub fn generate<Us: Side, const NOISY: bool, const QUIET: bool>(
 pub fn generate_all<Us: Side>(position: &Position, list: &mut MoveList) -> bool {
     list.clear();
     let masks = check_masks::<Us>(position);
-    if masks.in_check() {
-        generate::<Us, true, true>(position, &masks, list);
-    } else {
-        generate::<Us, true, false>(position, &masks, list);
-        generate::<Us, false, true>(position, &masks, list);
-    }
+    generate::<Us, true, true>(position, &masks, list);
     masks.in_check()
 }
 
@@ -357,22 +359,35 @@ const fn queen_side<Us: Side>() -> CastlingRights {
     }
 }
 
-fn serialize(list: &mut MoveList, from: Square, mut targets: BitBoard, theirs: BitBoard) {
+const fn home_rights<Us: Side>() -> CastlingRights {
+    CastlingRights(king_side::<Us>().0 | queen_side::<Us>().0)
+}
+
+fn emit_all(list: &mut MoveList, from: Square, mut targets: BitBoard, flags: MoveFlags) {
     while targets != EMPTY {
-        let to = pop_square(&mut targets);
-        let flags = if bit(to) & theirs == EMPTY {
-            MoveFlags::Quiet
-        } else {
-            MoveFlags::Capture
-        };
-        list.push(Move::new(from, to, flags));
+        list.push(Move::new(from, pop_square(&mut targets), flags));
+    }
+}
+
+/// `attacks` is already inside the requested halves, so splitting it on the
+/// enemy board settles every flag without a test per move.
+fn serialize<const NOISY: bool, const QUIET: bool>(
+    list: &mut MoveList,
+    from: Square,
+    attacks: BitBoard,
+    theirs: BitBoard,
+) {
+    if NOISY {
+        emit_all(list, from, attacks & theirs, MoveFlags::Capture);
+    }
+    if QUIET {
+        emit_all(list, from, attacks & !theirs, MoveFlags::Quiet);
     }
 }
 
 /// King steps and, in the quiet half, castles.
 fn king_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
     position: &Position,
-    masks: &CheckMasks,
     list: &mut MoveList,
 ) {
     let theirs = position.color(<Us::Them>::COLOR);
@@ -387,17 +402,23 @@ fn king_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
     // The king walks off the ray instead of covering it, so `active` does not
     // apply to it.
     let from = position.king_square(Us::COLOR);
-    let attacks = lookup::KING_ATTACKS[from as usize] & targets & !masks.danger;
-    serialize(list, from, attacks, theirs);
+    let steps = lookup::KING_ATTACKS[from as usize] & targets;
+    let castling = QUIET && position.castling().contains_either(const { home_rights::<Us>() });
+    if steps == EMPTY && !castling {
+        return;
+    }
+
+    let danger = danger::<Us>(position);
+    serialize::<NOISY, QUIET>(list, from, steps & !danger, theirs);
 
     if QUIET {
-        castles::<Us>(position, masks, list);
+        castles::<Us>(position, danger, list);
     }
 }
 
 /// The king square is part of the path, which keeps a king in check from
 /// castling out of it.
-fn castles<Us: Side>(position: &Position, masks: &CheckMasks, list: &mut MoveList) {
+fn castles<Us: Side>(position: &Position, danger: BitBoard, list: &mut MoveList) {
     // The rights are only still set if the king never moved.
     let from = const { king_origin::<Us>() };
     let occupied = position.occupied();
@@ -405,14 +426,14 @@ fn castles<Us: Side>(position: &Position, masks: &CheckMasks, list: &mut MoveLis
 
     if rights.contains(const { king_side::<Us>() })
         && occupied & const { home::<Us>(0b0110_0000) } == EMPTY
-        && masks.danger & const { home::<Us>(0b0111_0000) } == EMPTY
+        && danger & const { home::<Us>(0b0111_0000) } == EMPTY
     {
         list.push(Move::new(from, from + 2, MoveFlags::KingCastle));
     }
 
     if rights.contains(const { queen_side::<Us>() })
         && occupied & const { home::<Us>(0b0000_1110) } == EMPTY
-        && masks.danger & const { home::<Us>(0b0001_1100) } == EMPTY
+        && danger & const { home::<Us>(0b0001_1100) } == EMPTY
     {
         list.push(Move::new(from, from - 2, MoveFlags::QueenCastle));
     }
@@ -446,8 +467,9 @@ fn pawn_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
     let pinned = masks.rook_pin | masks.bishop_pin;
     let last_rank = const { home::<Us::Them>(0xff) };
 
-    // The whole set steps at once, so a move's origin is its target shifted back.
-    let mut emit = |mut targets: BitBoard, delta: i8, flags: MoveFlags| {
+    // The whole set steps at once, so a move's origin is its target shifted
+    // back, and whether it promotes is settled for the set, not per move.
+    let mut emit = |mut targets: BitBoard, delta: i8, flags: MoveFlags, promotes: bool| {
         while targets != EMPTY {
             let to = pop_square(&mut targets);
             let from = (to as i8 - delta) as Square;
@@ -456,7 +478,7 @@ fn pawn_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
             {
                 continue;
             }
-            if bit(to) & last_rank == EMPTY {
+            if !promotes {
                 list.push(Move::new(from, to, flags));
                 continue;
             }
@@ -479,23 +501,21 @@ fn pawn_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
         let double_rank =
             const { lookup::pawn_push::<Us>(lookup::pawn_push::<Us>(home::<Us>(0xff))) };
         let double = lookup::pawn_push::<Us>(single & double_rank) & empty;
-        emit(single & !last_rank & masks.active, push, MoveFlags::Quiet);
-        emit(double & masks.active, 2 * push, MoveFlags::DoublePush);
+        emit(single & !last_rank & masks.active, push, MoveFlags::Quiet, false);
+        emit(double & masks.active, 2 * push, MoveFlags::DoublePush, false);
     }
 
     if NOISY {
         let victims = position.color(<Us::Them>::COLOR) & masks.active;
-        emit(single & last_rank & masks.active, push, MoveFlags::Quiet);
-        emit(
-            lookup::pawn_attacks_west::<Us>(pawns) & victims,
-            const { pawn_delta::<Us>(-1) },
-            MoveFlags::Capture,
-        );
-        emit(
-            lookup::pawn_attacks_east::<Us>(pawns) & victims,
-            const { pawn_delta::<Us>(1) },
-            MoveFlags::Capture,
-        );
+        emit(single & last_rank & masks.active, push, MoveFlags::Quiet, true);
+        let west = const { pawn_delta::<Us>(-1) };
+        let east = const { pawn_delta::<Us>(1) };
+        let west_targets = lookup::pawn_attacks_west::<Us>(pawns) & victims;
+        let east_targets = lookup::pawn_attacks_east::<Us>(pawns) & victims;
+        emit(west_targets & !last_rank, west, MoveFlags::Capture, false);
+        emit(east_targets & !last_rank, east, MoveFlags::Capture, false);
+        emit(west_targets & last_rank, west, MoveFlags::Capture, true);
+        emit(east_targets & last_rank, east, MoveFlags::Capture, true);
 
         // The pawn taken does not stand on the square the capture lands on, so
         // `active` alone cannot say whether the capture answers a check.
@@ -540,7 +560,7 @@ fn piece_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
     while knights != EMPTY {
         let from = pop_square(&mut knights);
         let attacks = lookup::KNIGHT_ATTACKS[from as usize] & targets;
-        serialize(list, from, attacks, theirs);
+        serialize::<NOISY, QUIET>(list, from, attacks, theirs);
     }
 
     let mut diagonal = position.bishops(us) | position.queens(us);
@@ -550,7 +570,7 @@ fn piece_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
         if bit(from) & pinned != EMPTY {
             attacks &= lookup::LINE[king_square as usize][from as usize];
         }
-        serialize(list, from, attacks, theirs);
+        serialize::<NOISY, QUIET>(list, from, attacks, theirs);
     }
 
     let mut straight = position.rooks(us) | position.queens(us);
@@ -560,7 +580,7 @@ fn piece_moves<Us: Side, const NOISY: bool, const QUIET: bool>(
         if bit(from) & pinned != EMPTY {
             attacks &= lookup::LINE[king_square as usize][from as usize];
         }
-        serialize(list, from, attacks, theirs);
+        serialize::<NOISY, QUIET>(list, from, attacks, theirs);
     }
 }
 

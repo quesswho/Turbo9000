@@ -179,6 +179,10 @@ impl CastlingRights {
         self.0 & rights.0 == rights.0
     }
 
+    pub const fn contains_either(self, rights: Self) -> bool {
+        self.0 & rights.0 != 0
+    }
+
     pub fn add(&mut self, rights: Self) {
         self.0 |= rights.0;
     }
