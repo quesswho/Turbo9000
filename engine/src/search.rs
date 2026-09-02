@@ -88,7 +88,7 @@ struct Searcher<'a> {
     seen: Vec<u64>,
     nodes: u64,
     deadline: Option<Instant>,
-    stop: Option<Arc<AtomicBool>>,
+    stop: Arc<AtomicBool>,
     stopped: bool,
 }
 
@@ -97,11 +97,12 @@ impl Searcher<'_> {
         self.nodes += 1;
         if self.nodes & (CHECK_INTERVAL - 1) == 0 {
             if let Some(deadline) = self.deadline {
-                self.stopped |= Instant::now() >= deadline;
+                if Instant::now() >= deadline {
+                    // One thread's clock is every thread's clock.
+                    self.stop.store(true, Ordering::Relaxed);
+                }
             }
-            if let Some(flag) = &self.stop {
-                self.stopped |= flag.load(Ordering::Relaxed);
-            }
+            self.stopped |= self.stop.load(Ordering::Relaxed);
         }
     }
 }
@@ -146,9 +147,11 @@ fn repeats(seen: &[u64], hash: u64, halfmove_clock: u8) -> bool {
     false
 }
 
-pub fn search(
+/// One thread's share of the iterative deepening, over its own boards.
+fn run(
     position: &mut Position,
     limits: Limits,
+    stop: Arc<AtomicBool>,
     table: &TranspositionTable,
     history: &[u64],
 ) -> Report {
@@ -163,7 +166,7 @@ pub fn search(
         seen,
         nodes: 0,
         deadline: limits.deadline,
-        stop: limits.stop,
+        stop,
         stopped: false,
     };
 
@@ -191,6 +194,16 @@ pub fn search(
         depth: completed,
         nodes: searcher.nodes,
     }
+}
+
+pub fn search(
+    position: &mut Position,
+    limits: Limits,
+    table: &TranspositionTable,
+    history: &[u64],
+) -> Report {
+    let stop = limits.stop.clone().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    run(position, limits, stop, table, history)
 }
 
 impl Searcher<'_> {
