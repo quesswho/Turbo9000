@@ -20,7 +20,7 @@ struct Network {
     output_bias: i16,
 }
 
-static NET: Network = unsafe { mem::transmute(*include_bytes!("net.bin")) };
+const NET: Network = unsafe { mem::transmute(*include_bytes!("net.bin")) };
 
 const fn feature(perspective: Color, color: Color, piece: Piece, square: Square) -> usize {
     let theirs = (perspective.index() != color.index()) as usize;
@@ -28,9 +28,9 @@ const fn feature(perspective: Color, color: Color, piece: Piece, square: Square)
     (theirs * Piece::COUNT + piece.index()) * 64 + square as usize
 }
 
-fn screlu(value: i16, bias: i16) -> i32 {
-    let clipped = (i32::from(value) + i32::from(bias)).clamp(0, QA);
-    clipped * clipped
+fn activate(value: i16, weight: i16) -> i32 {
+    let clipped = value.clamp(0, QA as i16);
+    i32::from(clipped * weight) * i32::from(clipped)
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -40,7 +40,7 @@ pub struct Accumulator {
 
 impl Accumulator {
     pub const EMPTY: Self = Self {
-        values: [[0; HIDDEN]; Color::COUNT],
+        values: [NET.feature_bias; Color::COUNT],
     };
 
     pub fn add(&mut self, piece: Piece, color: Color, square: Square) {
@@ -66,14 +66,14 @@ pub fn evaluate(position: &Position) -> Score {
     let accumulator = position.accumulator();
     let us = position.side_to_move();
 
-    let mut sum: i64 = 0;
+    let mut sum = 0;
     for (perspective, weights) in [us, us.flip()].into_iter().zip(&NET.output_weights) {
         let values = &accumulator.values[perspective.index()];
-        for ((&value, &bias), &weight) in values.iter().zip(&NET.feature_bias).zip(weights) {
-            sum += i64::from(screlu(value, bias)) * i64::from(weight);
+        for (&value, &weight) in values.iter().zip(weights) {
+            sum += activate(value, weight);
         }
     }
 
-    let output = sum / i64::from(QA) + i64::from(NET.output_bias);
+    let output = i64::from(sum) / i64::from(QA) + i64::from(NET.output_bias);
     (output * i64::from(SCALE) / i64::from(QA * QB)) as Score
 }
