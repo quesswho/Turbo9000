@@ -33,7 +33,7 @@ const QB: i32 = 64;
 
 const SCALE: i32 = 400;
 
-#[repr(C)]
+#[repr(C, align(16))]
 struct Network {
     feature_weights: [[i16; HIDDEN]; FEATURES * KING_BUCKET_COUNT],
     feature_bias: [i16; HIDDEN],
@@ -41,7 +41,7 @@ struct Network {
     output_bias: [i16; OUTPUT_BUCKETS],
 }
 
-const NET: Network = unsafe { mem::transmute(*include_bytes!("net.bin")) };
+static NET: Network = unsafe { mem::transmute(*include_bytes!("net.bin")) };
 
 /// How one side sees the board: the weights of its king bucket, and the
 /// transform that puts its own side at the bottom and its king on files a to d.
@@ -92,13 +92,15 @@ pub struct Accumulator {
 }
 
 impl Accumulator {
-    pub const EMPTY: Self = Self {
-        values: [NET.feature_bias; Color::COUNT],
-        views: [
-            View::new(Color::ALL[0], 0),
-            View::new(Color::ALL[1], 56),
-        ],
-    };
+    pub fn empty() -> Self {
+        Self {
+            values: [NET.feature_bias; Color::COUNT],
+            views: [
+                View::new(Color::ALL[0], 0),
+                View::new(Color::ALL[1], 56),
+            ],
+        }
+    }
 
     pub fn add(&mut self, piece: Piece, color: Color, square: Square) {
         self.update::<true>(piece, color, square);

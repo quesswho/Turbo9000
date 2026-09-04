@@ -279,7 +279,7 @@ pub struct Undo {
 }
 
 impl Position {
-    pub const fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             pieces: [[EMPTY; Piece::COUNT]; Color::COUNT],
             colors: [EMPTY; Color::COUNT],
@@ -290,7 +290,7 @@ impl Position {
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
             hash: 0,
-            accumulator: Accumulator::EMPTY,
+            accumulator: Accumulator::empty(),
         }
     }
 
@@ -332,7 +332,7 @@ impl Position {
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
             hash: 0,
-            accumulator: Accumulator::EMPTY,
+            accumulator: Accumulator::empty(),
         };
         position.rebuild_mailbox();
         position.hash = position.compute_hash();
