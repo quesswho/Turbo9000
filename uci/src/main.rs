@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use engine::movegen::find_move;
 use engine::perft::perft;
 use engine::position::{Color, Position};
-use engine::search::{search, Limits, Score, MATE};
+use engine::search::{search, Info, Limits, Score, MATE};
 use engine::ttable::TranspositionTable;
 use engine::NAME;
 
@@ -117,16 +117,26 @@ fn go(
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let start = Instant::now();
+        let limits = limits.reporting(Arc::new(move |info: Info| {
+            let micros = start.elapsed().as_micros().max(1);
+            let mut line = format!(
+                "info depth {} multipv 1 score {} nodes {} time {} nps {}",
+                info.depth,
+                report_score(info.score),
+                info.nodes,
+                micros / 1_000,
+                info.nodes as u128 * 1_000_000 / micros
+            );
+            if !info.pv.is_empty() {
+                line.push_str(" pv");
+                for mv in info.pv {
+                    line.push(' ');
+                    line.push_str(&mv.to_string());
+                }
+            }
+            println!("{line}");
+        }));
         let report = search(&mut position, limits, &table, &history);
-        let micros = start.elapsed().as_micros().max(1);
-        println!(
-            "info depth {} score {} nodes {} time {} nps {}",
-            report.depth,
-            report_score(report.score),
-            report.nodes,
-            micros / 1_000,
-            report.nodes as u128 * 1_000_000 / micros
-        );
         if let Some(mv) = report.best {
             println!("bestmove {mv}");
         }

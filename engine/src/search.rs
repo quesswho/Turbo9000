@@ -40,12 +40,22 @@ fn reduction(depth: u32, index: usize) -> u32 {
     (1 + (depth - LMR_MIN_DEPTH) / 6 + late / 8).min(depth - 2)
 }
 
+pub struct Info<'a> {
+    pub depth: u32,
+    pub score: Score,
+    pub nodes: u64,
+    pub pv: &'a [Move],
+}
+
+pub type Reporter = Arc<dyn Fn(Info) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct Limits {
     depth: u32,
     deadline: Option<Instant>,
     stop: Option<Arc<AtomicBool>>,
     threads: usize,
+    info: Option<Reporter>,
 }
 
 impl Limits {
@@ -55,6 +65,7 @@ impl Limits {
             deadline: None,
             stop: None,
             threads: 1,
+            info: None,
         }
     }
 
@@ -65,6 +76,7 @@ impl Limits {
             deadline: Some(Instant::now() + span),
             stop: None,
             threads: 1,
+            info: None,
         }
     }
 
@@ -74,6 +86,7 @@ impl Limits {
             deadline: None,
             stop: None,
             threads: 1,
+            info: None,
         }
     }
 
@@ -86,6 +99,11 @@ impl Limits {
     /// How many threads share the search of the root position.
     pub fn threads(mut self, n: usize) -> Self {
         self.threads = n;
+        self
+    }
+
+    pub fn reporting(mut self, reporter: Reporter) -> Self {
+        self.info = Some(reporter);
         self
     }
 }
@@ -149,6 +167,36 @@ pub struct Report {
     pub nodes: u64,
 }
 
+fn principal_variation(
+    position: &Position,
+    table: &TranspositionTable,
+    depth: u32,
+    line: &mut Vec<Move>,
+) {
+    let mut board = position.clone();
+    let mut list = MoveList::new();
+    line.clear();
+    while line.len() < depth as usize {
+        let Some(entry) = table.probe(board.hash()) else {
+            break;
+        };
+        let mv = entry.best();
+        if mv == Move::NULL {
+            break;
+        }
+        if board.side_to_move().is_white() {
+            generate_all::<White>(&board, &mut list);
+        } else {
+            generate_all::<Black>(&board, &mut list);
+        }
+        if !list.moves().contains(&mv) {
+            break;
+        }
+        board.make_move(mv);
+        line.push(mv);
+    }
+}
+
 fn repeats(seen: &[u64], hash: u64, halfmove_clock: u8) -> bool {
     let span = (halfmove_clock as usize).min(seen.len());
     let window = &seen[seen.len() - span..];
@@ -196,6 +244,7 @@ fn run(
     let mut best = None;
     let mut score = 0;
     let mut completed = 0;
+    let mut pv = Vec::new();
     for iteration in 1..=limits.depth {
         let (found, found_score) = if position.side_to_move().is_white() {
             searcher.aspiration::<White>(position, iteration, score)
@@ -210,6 +259,17 @@ fn run(
             break;
         }
         (best, score, completed) = (found, found_score, iteration);
+        if index == 0 {
+            if let Some(report) = &limits.info {
+                principal_variation(position, table, iteration, &mut pv);
+                report(Info {
+                    depth: iteration,
+                    score,
+                    nodes: searcher.nodes,
+                    pv: &pv,
+                });
+            }
+        }
     }
     Report {
         best,
