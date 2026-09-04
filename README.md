@@ -10,6 +10,9 @@ Turbo9000 has just enough support for UCI and can be played on any GUI that spea
 
 Add `target/release/turbo9000` as a UCI engine.
 
+`.cargo/config.toml` builds for the host CPU, which can give a performance boost
+but the binary is build for the machine. Set `RUSTFLAGS` to override this.
+
 ## Testing
 Games are played with fastchess against a baseline revision:
 
