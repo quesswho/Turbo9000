@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::nnue::evaluate;
 use crate::movegen::{check_masks, generate, generate_all, MoveList, HISTORY_MAX};
 use crate::moves::Move;
-use crate::position::{Black, Color, Position, Side, White};
+use crate::position::{Black, Color, Position, Side, White, EMPTY};
 use crate::ttable::{Flag, TranspositionTable};
 use crate::zobrist::splitmix64;
 
@@ -33,6 +33,15 @@ const ASPIRATION_MIN_DEPTH: u32 = 6;
 
 const LMR_MIN_DEPTH: u32 = 3;
 const LMR_MIN_MOVES: usize = 3;
+
+/// Below this depth a pass proves too little to pay for its search.
+const NULL_MIN_DEPTH: u32 = 3;
+
+/// From this depth a pass that cuts is checked against a real search.
+const VERIFY_MIN_DEPTH: u32 = 6;
+
+/// Scores this high are mates, which a pass is never allowed to claim.
+const MATE_BOUND: Score = MATE - MAX_DEPTH as Score;
 
 /// How much to shave off a late quiet move.
 fn reduction(depth: u32, index: usize) -> u32 {
@@ -123,6 +132,9 @@ struct Searcher<'a> {
     rng: u64,
     /// Helpers search a shuffled root so they do not replicate the main tree.
     helper: bool,
+    /// Plies below this may not pass, so a verification search sees the moves
+    /// that the pass it is checking would have skipped.
+    null_min_ply: u32,
 }
 
 impl Searcher<'_> {
@@ -239,6 +251,7 @@ fn run(
         stopped: false,
         rng: position.hash() ^ (index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         helper: index > 0,
+        null_min_ply: 0,
     };
 
     let mut best = None;
@@ -457,9 +470,58 @@ impl Searcher<'_> {
             }
         }
 
+        let masks = check_masks::<Us>(position);
+        let in_check = masks.in_check();
+
+        // If passing the move still leaves the opponent short of beta, the
+        // node is so good that searching it properly is not worth it. A side
+        // down to pawns is the one case where passing is plainly a gain, so it
+        // does not get to try.
+        if depth >= NULL_MIN_DEPTH
+            && ply >= self.null_min_ply
+            && beta - alpha == 1
+            && !in_check
+            && position.color(Us::COLOR) & !(position.pawns(Us::COLOR) | position.king(Us::COLOR))
+                != EMPTY
+            && evaluate(position) >= beta
+        {
+            let cut = 3 + depth / 4;
+            self.seen.push(hash);
+            let undo = position.make_null();
+            let mut score = -self.negamax::<Us::Them>(
+                position,
+                depth.saturating_sub(1 + cut),
+                ply + 1,
+                -beta,
+                -beta + 1,
+            );
+            position.unmake_null(undo);
+            self.seen.pop();
+            let shallow = depth - cut.min(depth);
+            // A side whose every move loses ground is in zugzwang, and passing
+            // flatters it there. Where the depth pays for it, the cut is played
+            // back with real moves before it is believed.
+            let proven = if score < beta || self.stopped {
+                false
+            } else if depth < VERIFY_MIN_DEPTH || self.null_min_ply != 0 {
+                true
+            } else {
+                self.null_min_ply = ply + shallow;
+                let verified = self.negamax::<Us>(position, shallow, ply, beta - 1, beta);
+                self.null_min_ply = 0;
+                score = verified;
+                verified >= beta
+            };
+            if proven {
+                // A pass can fabricate a mate that no real line reaches.
+                return if score >= MATE_BOUND { beta } else { score };
+            }
+        }
+
         // Every ply keeps its own movelist
         let here = ply as usize;
-        let in_check = generate_all::<Us>(position, &mut self.lists[here]);
+        self.lists[here].clear();
+        generate::<Us, true, true>(position, &masks, &mut self.lists[here]);
         if self.lists[here].is_empty() {
             return if in_check { ply as Score - MATE } else { 0 };
         }

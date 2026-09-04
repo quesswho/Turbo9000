@@ -6,7 +6,7 @@
 
 use engine::movegen::{generate_all, MoveList};
 use engine::moves::Move;
-use engine::position::{square, Black, ColoredPiece, Position, Side, White};
+use engine::position::{square, Black, ColoredPiece, Position, Side, White, NO_EN_PASSANT};
 
 // Standard perft fixtures, chosen because together they exercise captures,
 // promotions, castling and en passant heavily.
@@ -222,5 +222,23 @@ fn promotions_round_trip() {
         position.unmake_move(mv, undo);
         assert_hash_consistent(&position);
         assert_eq!(position.hash(), before);
+    }
+}
+
+/// A pass changes the side to move and clears any en passant square, and
+/// unmaking it must give back the position it was made from, untouched.
+#[test]
+fn null_moves_round_trip() {
+    for fen in [STARTPOS, KIWIPETE, EN_PASSANT_FEN, POSITION_4] {
+        let mut position: Position = fen.parse().expect("bad fen");
+        let before = position.clone();
+
+        let undo = position.make_null();
+        assert_hash_consistent(&position);
+        assert_ne!(position.side_to_move(), before.side_to_move());
+        assert_eq!(position.en_passant(), NO_EN_PASSANT);
+
+        position.unmake_null(undo);
+        assert_eq!(position, before, "unmake_null did not restore:\n{position}");
     }
 }
