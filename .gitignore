@@ -5,3 +5,4 @@ books/*
 config.json
 .sprt/
 checkpoints/
+data/
