@@ -726,6 +726,25 @@ impl Position {
             self.sync_perspective(us);
         }
     }
+
+    /// Passes a move
+    pub fn make_null(&mut self) -> Undo {
+        let undo = self.undo(None);
+        if self.en_passant != NO_EN_PASSANT {
+            self.hash ^= zobrist::en_passant_key(file_of(self.en_passant));
+            self.en_passant = NO_EN_PASSANT;
+        }
+        self.halfmove_clock = 0;
+        self.side_to_move = self.side_to_move.flip();
+        self.hash ^= zobrist::side_key();
+        undo
+    }
+
+    /// Takes back the pass `make_null` returned this `Undo` for.
+    pub fn unmake_null(&mut self, undo: Undo) {
+        self.side_to_move = self.side_to_move.flip();
+        self.restore(undo);
+    }
 }
 
 impl Default for Position {
