@@ -60,7 +60,7 @@ fn a_forced_mate_is_found() {
 fn a_search_reports_the_nodes_it_spent() {
     let output = session("position startpos\ngo depth 2\nquit\n");
     assert!(output.contains(" nodes "), "{output}");
-    assert!(output.contains("info depth 2 score cp "), "{output}");
+    assert!(output.contains("info depth 2 multipv 1 score cp "), "{output}");
 }
 
 #[test]
