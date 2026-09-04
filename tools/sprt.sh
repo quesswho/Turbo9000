@@ -47,7 +47,7 @@ exec external/fastchess/fastchess \
     -each tc="${TC:-8+0.08}" \
     -openings file="$book" format=epd order=random \
     -rounds 100000 -games 2 -repeat \
-    -concurrency "${CONCURRENCY:-5}" \
+    -concurrency "${CONCURRENCY:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}" \
     -sprt elo0="${ELO0:-0}" elo1="${ELO1:-10}" alpha=0.05 beta=0.05 model=normalized \
     -pgnout file=.sprt/sprt.pgn \
     -config outname=.sprt/config.json \
