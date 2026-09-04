@@ -108,6 +108,20 @@ impl Accumulator {
         self.update::<false>(piece, color, square);
     }
 
+    /// A piece that stays on the board in one pass, since both of its features
+    /// share the accumulator loads and stores.
+    pub fn move_piece(&mut self, piece: Piece, color: Color, from: Square, to: Square) {
+        for perspective in Color::ALL {
+            let view = self.views[perspective.index()];
+            let sub = &NET.feature_weights[feature(view, perspective, color, piece, from)];
+            let add = &NET.feature_weights[feature(view, perspective, color, piece, to)];
+            let values = &mut self.values[perspective.index()];
+            for ((value, &sub), &add) in values.iter_mut().zip(sub).zip(add) {
+                *value += add - sub;
+            }
+        }
+    }
+
     /// True while the side still sees the board through the view its values
     /// were accumulated with.
     pub fn sees(&self, perspective: Color, king: Square) -> bool {

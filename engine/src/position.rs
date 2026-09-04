@@ -618,8 +618,7 @@ impl Position {
         self.mailbox[from as usize] = None;
         self.mailbox[to as usize] = Some(colored);
         self.hash ^= zobrist::piece_key(colored, from) ^ zobrist::piece_key(colored, to);
-        self.accumulator.remove(piece, color, from);
-        self.accumulator.add(piece, color, to);
+        self.accumulator.move_piece(piece, color, from, to);
     }
 
     /// Applies a move without checking legality, returning what it destroyed.
