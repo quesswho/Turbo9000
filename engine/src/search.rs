@@ -40,6 +40,11 @@ const NULL_MIN_DEPTH: u32 = 3;
 /// From this depth a pass that cuts is checked against a real search.
 const VERIFY_MIN_DEPTH: u32 = 6;
 
+const RFP_MAX_DEPTH: u32 = 6;
+const RFP_MARGIN: Score = 75;
+
+const NO_EVAL: Score = Score::MIN;
+
 /// Scores this high are mates, which a pass is never allowed to claim.
 const MATE_BOUND: Score = MATE - MAX_DEPTH as Score;
 
@@ -135,6 +140,7 @@ struct Searcher<'a> {
     /// Plies below this may not pass, so a verification search sees the moves
     /// that the pass it is checking would have skipped.
     null_min_ply: u32,
+    evals: Vec<Score>,
 }
 
 impl Searcher<'_> {
@@ -252,6 +258,7 @@ fn run(
         rng: position.hash() ^ (index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         helper: index > 0,
         null_min_ply: 0,
+        evals: vec![NO_EVAL; limits.depth as usize + QUIESCENCE_DEPTH],
     };
 
     let mut best = None;
@@ -470,56 +477,68 @@ impl Searcher<'_> {
             }
         }
 
+        let here = ply as usize;
         let masks = check_masks::<Us>(position);
         let in_check = masks.in_check();
 
-        // If passing the move still leaves the opponent short of beta, the
-        // node is so good that searching it properly is not worth it. A side
-        // down to pawns is the one case where passing is plainly a gain, so it
-        // does not get to try.
-        if depth >= NULL_MIN_DEPTH
-            && ply >= self.null_min_ply
-            && beta - alpha == 1
-            && !in_check
-            && position.color(Us::COLOR) & !(position.pawns(Us::COLOR) | position.king(Us::COLOR))
-                != EMPTY
-            && evaluate(position) >= beta
-        {
-            let cut = 3 + depth / 4;
-            self.seen.push(hash);
-            let undo = position.make_null();
-            let mut score = -self.negamax::<Us::Them>(
-                position,
-                depth.saturating_sub(1 + cut),
-                ply + 1,
-                -beta,
-                -beta + 1,
-            );
-            position.unmake_null(undo);
-            self.seen.pop();
-            let shallow = depth - cut.min(depth);
-            // A side whose every move loses ground is in zugzwang, and passing
-            // flatters it there. Where the depth pays for it, the cut is played
-            // back with real moves before it is believed.
-            let proven = if score < beta || self.stopped {
-                false
-            } else if depth < VERIFY_MIN_DEPTH || self.null_min_ply != 0 {
-                true
-            } else {
-                self.null_min_ply = ply + shallow;
-                let verified = self.negamax::<Us>(position, shallow, ply, beta - 1, beta);
-                self.null_min_ply = 0;
-                score = verified;
-                verified >= beta
-            };
-            if proven {
-                // A pass can fabricate a mate that no real line reaches.
-                return if score >= MATE_BOUND { beta } else { score };
+        let eval = if in_check { NO_EVAL } else { evaluate(position) };
+        self.evals[here] = eval;
+        let previous = if here >= 2 { self.evals[here - 2] } else { NO_EVAL };
+        let improving = !in_check && previous != NO_EVAL && eval > previous;
+
+        if !in_check && beta - alpha == 1 && beta > -MATE_BOUND {
+            if depth <= RFP_MAX_DEPTH
+                && eval - RFP_MARGIN * (depth - improving as u32) as Score >= beta
+            {
+                return eval;
+            }
+
+            // If passing the move still leaves the opponent short of beta, the
+            // node is so good that searching it properly is not worth it. A
+            // side down to pawns is the one case where passing is plainly a
+            // gain, so it does not get to try.
+            if depth >= NULL_MIN_DEPTH
+                && ply >= self.null_min_ply
+                && eval >= beta
+                && position.color(Us::COLOR)
+                    & !(position.pawns(Us::COLOR) | position.king(Us::COLOR))
+                    != EMPTY
+            {
+                let cut = 3 + depth / 4;
+                self.seen.push(hash);
+                let undo = position.make_null();
+                let mut score = -self.negamax::<Us::Them>(
+                    position,
+                    depth.saturating_sub(1 + cut),
+                    ply + 1,
+                    -beta,
+                    -beta + 1,
+                );
+                position.unmake_null(undo);
+                self.seen.pop();
+                let shallow = depth - cut.min(depth);
+                // A side whose every move loses ground is in zugzwang, and passing
+                // flatters it there. Where the depth pays for it, the cut is played
+                // back with real moves before it is believed.
+                let proven = if score < beta || self.stopped {
+                    false
+                } else if depth < VERIFY_MIN_DEPTH || self.null_min_ply != 0 {
+                    true
+                } else {
+                    self.null_min_ply = ply + shallow;
+                    let verified = self.negamax::<Us>(position, shallow, ply, beta - 1, beta);
+                    self.null_min_ply = 0;
+                    score = verified;
+                    verified >= beta
+                };
+                if proven {
+                    // A pass can fabricate a mate that no real line reaches.
+                    return if score >= MATE_BOUND { beta } else { score };
+                }
             }
         }
 
         // Every ply keeps its own movelist
-        let here = ply as usize;
         self.lists[here].clear();
         generate::<Us, true, true>(position, &masks, &mut self.lists[here]);
         if self.lists[here].is_empty() {
