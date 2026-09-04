@@ -514,14 +514,34 @@ impl Position {
         &self.accumulator
     }
 
-    /// Needed only after setting the piece boards directly, as `starting` does.
+    /// Needed after the boards are filled directly or piece by piece, since a
+    /// side's bucket is only settled once its king is on the board.
     pub fn refresh_accumulator(&mut self) {
-        self.accumulator = Accumulator::EMPTY;
+        for color in Color::ALL {
+            self.refresh_perspective(color);
+        }
+    }
+
+    /// A side sees the board through the bucket its own king stands in, so all
+    /// of its features have to be recomputed once that bucket changes.
+    fn refresh_perspective(&mut self, perspective: Color) {
+        let king = self.king_square(perspective);
+        self.accumulator.reset(perspective, king);
+
         let mut occupied = self.occupied;
         while occupied != EMPTY {
             let square = pop_square(&mut occupied);
             let colored = self.mailbox[square as usize].expect("occupied square without a piece");
-            self.accumulator.add(colored.piece(), colored.color(), square);
+            self.accumulator
+                .add_for(perspective, colored.piece(), colored.color(), square);
+        }
+    }
+
+    /// Called wherever a king moved, which is the only way a side stops seeing
+    /// the board the way its values were accumulated.
+    fn sync_perspective(&mut self, perspective: Color) {
+        if !self.accumulator.sees(perspective, self.king_square(perspective)) {
+            self.refresh_perspective(perspective);
         }
     }
 
@@ -663,6 +683,10 @@ impl Position {
         self.side_to_move = them;
         self.hash ^= zobrist::side_key();
 
+        if moving == Piece::King {
+            self.sync_perspective(us);
+        }
+
         undo
     }
 
@@ -698,6 +722,10 @@ impl Position {
         }
 
         self.restore(undo);
+
+        if self.mailbox[from as usize] == Some(ColoredPiece::new(Piece::King, us)) {
+            self.sync_perspective(us);
+        }
     }
 }
 
@@ -755,6 +783,7 @@ impl FromStr for Position {
 
         position.halfmove_clock = fields.next().and_then(|c| c.parse().ok()).unwrap_or(0);
         position.hash = position.compute_hash();
+        position.refresh_accumulator();
 
         Ok(position)
     }
