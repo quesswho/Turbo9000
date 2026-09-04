@@ -2,3 +2,6 @@
 resolver = "3"
 members = ["datagen", "engine", "uci"]
 exclude = ["tools/trainer"]
+
+[workspace.package]
+version = "0.1.0"

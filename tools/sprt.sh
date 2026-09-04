@@ -1,16 +1,22 @@
 #!/bin/sh
 # Play the working tree against a baseline revision until SPRT decides.
+# Without a baseline-ref, the newest version tag (v*) is used.
 set -eu
 
-if [ $# -lt 1 ]; then
-    echo "usage: $0 <baseline-ref> [fastchess options...]" >&2
-    exit 1
+if [ $# -ge 1 ]; then
+    ref=$1
+    shift
+else
+    ref=$(git tag -l 'v*' --sort=-v:refname | head -n 1)
+    if [ -z "$ref" ]; then
+        echo "no version tags: tag a baseline or pass a ref explicitly" >&2
+        exit 1
+    fi
 fi
 
 cd "$(dirname "$0")/.."
 
-sha=$(git rev-parse --short "$1")
-shift
+sha=$(git rev-parse --short "$ref")
 
 book=${BOOK:-books/turbo.epd}
 baseline=.sprt/bin/$sha
