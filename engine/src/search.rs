@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::nnue::evaluate;
-use crate::movegen::{check_masks, generate, generate_all, MoveList, HISTORY_MAX};
+use crate::movegen::{check_masks, generate, generate_all, CheckSquares, MoveList, HISTORY_MAX};
 use crate::moves::Move;
-use crate::position::{Black, Color, Position, Side, White, EMPTY};
+use crate::position::{Black, Color, Piece, Position, Side, White, EMPTY};
 use crate::ttable::{Flag, TranspositionTable};
 use crate::zobrist::splitmix64;
 
@@ -43,10 +43,20 @@ const VERIFY_MIN_DEPTH: u32 = 6;
 const RFP_MAX_DEPTH: u32 = 6;
 const RFP_MARGIN: Score = 75;
 
+const LMP_MAX_DEPTH: u32 = 6;
+
+const FUTILITY_MAX_DEPTH: u32 = 6;
+const FUTILITY_MARGIN: Score = 100;
+
 const NO_EVAL: Score = Score::MIN;
 
 /// Scores this high are mates, which a pass is never allowed to claim.
 const MATE_BOUND: Score = MATE - MAX_DEPTH as Score;
+
+/// Quiet moves worth trying at `depth`, widened when the eval is rising.
+fn late_move_count(depth: u32, improving: bool) -> usize {
+    ((3 + depth * depth) / (2 - improving as u32)) as usize
+}
 
 /// How much to shave off a late quiet move.
 fn reduction(depth: u32, index: usize) -> u32 {
@@ -485,8 +495,9 @@ impl Searcher<'_> {
         self.evals[here] = eval;
         let previous = if here >= 2 { self.evals[here - 2] } else { NO_EVAL };
         let improving = !in_check && previous != NO_EVAL && eval > previous;
+        let non_pv = !in_check && beta - alpha == 1;
 
-        if !in_check && beta - alpha == 1 && beta > -MATE_BOUND {
+        if non_pv && beta > -MATE_BOUND {
             if depth <= RFP_MAX_DEPTH
                 && eval - RFP_MARGIN * (depth - improving as u32) as Score >= beta
             {
@@ -550,6 +561,10 @@ impl Searcher<'_> {
         let side = position.side_to_move().index();
         self.lists[here].score(position, tt_move, killers, &self.history[side]);
 
+        // Built on the first move that a pruner wants to skip, since most
+        // nodes cut off before one comes up.
+        let mut checks: Option<CheckSquares> = None;
+
         let alpha_orig = alpha;
         let mut best_move = None;
         // The list is not empty, so some move always beats this.
@@ -558,17 +573,30 @@ impl Searcher<'_> {
         self.seen.push(hash);
         for index in 0..self.lists[here].len() {
             let mv = self.lists[here].pick(index);
+            let quiet = !mv.is_capture() && !mv.is_promotion();
+
+            if quiet && non_pv && best_score > -MATE_BOUND {
+                let late = depth <= LMP_MAX_DEPTH && index >= late_move_count(depth, improving);
+                let futile = depth <= FUTILITY_MAX_DEPTH
+                    && eval + FUTILITY_MARGIN * depth as Score <= alpha;
+                // A checking quiet is left alone, so the pruners cannot skip
+                // past a mate the search would otherwise reach.
+                if late || futile {
+                    let checks = checks.get_or_insert_with(|| CheckSquares::new::<Us>(position));
+                    let piece = position.piece_at(mv.from()).map_or(Piece::Pawn, |on| on.piece());
+                    if !checks.given_by(piece, mv.to()) {
+                        continue;
+                    }
+                }
+            }
+
             let undo = position.make_move(mv);
             // Ordering makes the first move the likely best, so it is worth a
             // full window.
             let mut score = if index == 0 {
                 -self.negamax::<Us::Them>(position, depth - 1, ply + 1, -beta, -alpha)
             } else {
-                let cut = if depth >= LMR_MIN_DEPTH
-                    && index >= LMR_MIN_MOVES
-                    && !in_check
-                    && !mv.is_capture()
-                    && !mv.is_promotion()
+                let cut = if depth >= LMR_MIN_DEPTH && index >= LMR_MIN_MOVES && !in_check && quiet
                 {
                     reduction(depth, index)
                 } else {
@@ -599,7 +627,7 @@ impl Searcher<'_> {
                 }
                 if alpha >= beta {
                     self.seen.pop();
-                    if !mv.is_capture() && !mv.is_promotion() {
+                    if quiet {
                         self.remember_killer(mv, here);
                         self.reward_history(mv, position.side_to_move().index(), depth);
                     }
@@ -644,12 +672,18 @@ impl Searcher<'_> {
         }
 
         let masks = check_masks::<Us>(position);
+        let in_check = masks.in_check();
         self.lists[here].clear();
         generate::<Us, true, false>(position, &masks, &mut self.lists[here]);
         self.lists[here].score(position, Move::NULL, [Move::NULL; 2], &EMPTY_HISTORY);
 
         for index in 0..self.lists[here].len() {
             let mv = self.lists[here].pick(index);
+            // Only noisy moves are generated here, if SEE reports a bad score,
+            // then skip.
+            if !in_check && self.lists[here].loses_material(index) {
+                break;
+            }
             let undo = position.make_move(mv);
             let score = -self.quiescence::<Us::Them>(position, -beta, -alpha, ply + 1);
             position.unmake_move(mv, undo);

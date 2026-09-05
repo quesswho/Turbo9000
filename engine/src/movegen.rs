@@ -42,6 +42,41 @@ pub enum Stage {
 
 pub const NO_CHECK: BitBoard = !EMPTY;
 
+/// The squares a piece of ours has to land on to check their king.
+pub struct CheckSquares {
+    pawn: BitBoard,
+    knight: BitBoard,
+    bishop: BitBoard,
+    rook: BitBoard,
+}
+
+impl CheckSquares {
+    pub fn new<Us: Side>(position: &Position) -> Self {
+        let them = <Us::Them>::COLOR;
+        let square = position.king_square(them);
+        let occupied = position.occupied();
+        Self {
+            pawn: lookup::pawn_attacks::<Us::Them>(position.king(them)),
+            knight: lookup::KNIGHT_ATTACKS[square as usize],
+            bishop: lookup::bishop_attacks(square, occupied),
+            rook: lookup::rook_attacks(square, occupied),
+        }
+    }
+
+    /// Direct checks only, so a discovered check reads as no check at all.
+    pub fn given_by(&self, piece: Piece, to: Square) -> bool {
+        let squares = match piece {
+            Piece::Pawn => self.pawn,
+            Piece::Knight => self.knight,
+            Piece::Bishop => self.bishop,
+            Piece::Rook => self.rook,
+            Piece::Queen => self.bishop | self.rook,
+            Piece::King => EMPTY,
+        };
+        squares & bit(to) != EMPTY
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CheckMasks {
     pub active: BitBoard,
@@ -190,15 +225,138 @@ const KILLER_RANK: i32 = 1 << 18;
 /// Bounds a history score so a quiet move can never outrank a killer.
 pub const HISTORY_MAX: i32 = 1 << 14;
 
+const BAD_CAPTURE_RANK: i32 = 1 << 17;
+
+/// The king is never taken, so the exchange gives it no value.
+pub const PIECE_VALUES: [i32; Piece::COUNT] = [100, 320, 330, 500, 900, 0];
+
+const SEE_ORDER: [Piece; Piece::COUNT] = [
+    Piece::Pawn,
+    Piece::Knight,
+    Piece::Bishop,
+    Piece::Rook,
+    Piece::Queen,
+    Piece::King,
+];
+
+/// Everything bearing on `square`, seen through `occupied` rather than through
+/// the board, so an exchange sees the sliders behind what it has taken.
+fn attackers_to(position: &Position, square: Square, occupied: BitBoard) -> BitBoard {
+    let target = bit(square);
+    let straight = position.pieces_of_kind(Piece::Rook) | position.pieces_of_kind(Piece::Queen);
+    let diagonal = position.pieces_of_kind(Piece::Bishop) | position.pieces_of_kind(Piece::Queen);
+
+    // Pawn attacks run backwards from the square onto the pawns bearing on it.
+    (lookup::pawn_attacks::<Black>(target) & position.pawns(White::COLOR))
+        | (lookup::pawn_attacks::<White>(target) & position.pawns(Black::COLOR))
+        | (lookup::KNIGHT_ATTACKS[square as usize] & position.pieces_of_kind(Piece::Knight))
+        | (lookup::KING_ATTACKS[square as usize] & position.pieces_of_kind(Piece::King))
+        | (lookup::rook_attacks(square, occupied) & straight)
+        | (lookup::bishop_attacks(square, occupied) & diagonal)
+}
+
+/// The file the pawn was taken towards, on the rank it was taken from.
+const fn en_passant_victim(mv: Move) -> Square {
+    (mv.from() & 56) | (mv.to() & 7)
+}
+
+/// Compute whether an exchange wins at least `threshold`.
+pub fn see_ge(position: &Position, mv: Move, threshold: i32) -> bool {
+    let (from, to) = (mv.from(), mv.to());
+
+    let mut gain = if mv.is_en_passant() {
+        PIECE_VALUES[Piece::Pawn.index()]
+    } else {
+        match position.piece_at(to) {
+            Some(on) => PIECE_VALUES[on.piece().index()],
+            None => 0,
+        }
+    };
+
+    let mut next = position.piece_at(from).map_or(Piece::Pawn, |on| on.piece());
+    if mv.is_promotion() {
+        next = mv.promoted_piece();
+        gain += PIECE_VALUES[next.index()] - PIECE_VALUES[Piece::Pawn.index()];
+    }
+
+    let mut swap = gain - threshold;
+    if swap < 0 {
+        return false;
+    }
+    swap = PIECE_VALUES[next.index()] - swap;
+    if swap <= 0 {
+        return true;
+    }
+
+    let mut occupied = position.occupied() ^ bit(from) ^ bit(to);
+    if mv.is_en_passant() {
+        occupied ^= bit(en_passant_victim(mv));
+    }
+
+    let straight = position.pieces_of_kind(Piece::Rook) | position.pieces_of_kind(Piece::Queen);
+    let diagonal = position.pieces_of_kind(Piece::Bishop) | position.pieces_of_kind(Piece::Queen);
+    let mut attackers = attackers_to(position, to, occupied);
+
+    let mut side = position.side_to_move();
+    let mut winning = 1;
+    loop {
+        side = side.flip();
+        attackers &= occupied;
+        let ours = attackers & position.color(side);
+        if ours == EMPTY {
+            break;
+        }
+        winning ^= 1;
+
+        let mut cheapest = Piece::King;
+        let mut board = EMPTY;
+        for piece in SEE_ORDER {
+            let candidates = ours & position.pieces(piece, side);
+            if candidates != EMPTY {
+                (cheapest, board) = (piece, candidates);
+                break;
+            }
+        }
+
+        if cheapest == Piece::King {
+            // The king may not take into a square the other side still holds.
+            if attackers & position.color(side.flip()) != EMPTY {
+                winning ^= 1;
+            }
+            break;
+        }
+
+        swap = PIECE_VALUES[cheapest.index()] - swap;
+        if swap < winning {
+            break;
+        }
+
+        occupied ^= board & board.wrapping_neg();
+        // Only the line the taken piece stood on can open, and a knight bearing
+        // on a square is never on a line through it.
+        match cheapest {
+            Piece::Pawn | Piece::Bishop => {
+                attackers |= lookup::bishop_attacks(to, occupied) & diagonal;
+            }
+            Piece::Rook => attackers |= lookup::rook_attacks(to, occupied) & straight,
+            Piece::Queen => {
+                attackers |= lookup::bishop_attacks(to, occupied) & diagonal;
+                attackers |= lookup::rook_attacks(to, occupied) & straight;
+            }
+            _ => {}
+        }
+    }
+    winning != 0
+}
+
 /// `MVV_LVA[victim][attacker]`: most valuable victim, cheapest attacker.
 const MVV_LVA: [[i32; Piece::COUNT]; Piece::COUNT] = {
-    let victims = [100, 320, 330, 500, 900, 0];
     let mut table = [[0; Piece::COUNT]; Piece::COUNT];
     let mut victim = 0;
     while victim < Piece::COUNT {
         let mut attacker = 0;
         while attacker < Piece::COUNT {
-            table[victim][attacker] = CAPTURE_RANK + victims[victim] * 16 - attacker as i32;
+            table[victim][attacker] = CAPTURE_RANK + PIECE_VALUES[victim] * 16 - attacker as i32;
             attacker += 1;
         }
         victim += 1;
@@ -261,6 +419,12 @@ impl MoveList {
         }
     }
 
+    /// Whether the move picked into `index` is a capture the exchange says
+    /// loses material.
+    pub fn loses_material(&self, index: usize) -> bool {
+        (BAD_CAPTURE_RANK..KILLER_RANK).contains(&self.scores[index])
+    }
+
     /// Swaps the best move from `start` onwards into `start` and returns it.
     pub fn pick(&mut self, start: usize) -> Move {
         let scores = &self.scores[start..self.len];
@@ -291,7 +455,15 @@ fn rank(
         // En passant leaves `to` empty, and the victim is always a pawn.
         let victim = position.piece_at(mv.to()).map_or(Piece::Pawn, |on| on.piece());
         let attacker = position.piece_at(mv.from()).map_or(Piece::Pawn, |on| on.piece());
-        MVV_LVA[victim.index()][attacker.index()]
+        let score = MVV_LVA[victim.index()][attacker.index()];
+        // A victim worth at least the attacker cannot lose material.
+        if PIECE_VALUES[victim.index()] >= PIECE_VALUES[attacker.index()]
+            || see_ge(position, mv, 0)
+        {
+            score
+        } else {
+            score - CAPTURE_RANK + BAD_CAPTURE_RANK
+        }
     } else if mv.is_promotion() {
         PROMOTION_RANK + mv.promoted_piece().index() as i32
     } else if mv == killers[0] {
