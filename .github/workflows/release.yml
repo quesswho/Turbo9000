@@ -1,0 +1,56 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        level: [x86-64-v1, x86-64-v2, x86-64-v3, x86-64-v4]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      # RUSTFLAGS overrides the target-cpu=native in .cargo/config.toml, so the
+      # binaries stay runnable on any CPU meeting the level they are built for.
+      - name: build
+        shell: bash
+        env:
+          RUSTFLAGS: -C target-cpu=${{ matrix.level }}
+        run: cargo build --release --bin turbo9000
+
+      - name: name the binary
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then os=win; ext=.exe; else os=linux; ext=; fi
+          mkdir dist
+          cp "target/release/turbo9000$ext" \
+             "dist/turbo9000-${GITHUB_REF_NAME#v}-$os-${{ matrix.level }}$ext"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turbo9000-${{ runner.os }}-${{ matrix.level }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # x86-64-v2 is the widest level most testers can run; v1 is the fallback
+      # for older hardware, v3 needs AVX2 and v4 needs AVX-512.
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
