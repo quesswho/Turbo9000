@@ -37,6 +37,8 @@ fn main() {
         None => 0x2545_F491_4F6C_DD1D,
     };
 
+    eprintln!("{threads} threads, {nodes} nodes a move, seed {seed}");
+
     let file = File::create(&output).expect("cannot create the output file");
     let writer = Mutex::new(BufWriter::new(file));
     let written = AtomicU64::new(0);
