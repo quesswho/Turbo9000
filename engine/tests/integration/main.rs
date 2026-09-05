@@ -1,3 +1,4 @@
+mod budget;
 mod clock;
 mod common;
 mod draws;
