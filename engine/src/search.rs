@@ -672,12 +672,18 @@ impl Searcher<'_> {
         }
 
         let masks = check_masks::<Us>(position);
+        let in_check = masks.in_check();
         self.lists[here].clear();
         generate::<Us, true, false>(position, &masks, &mut self.lists[here]);
         self.lists[here].score(position, Move::NULL, [Move::NULL; 2], &EMPTY_HISTORY);
 
         for index in 0..self.lists[here].len() {
             let mv = self.lists[here].pick(index);
+            // Only noisy moves are generated here, if SEE reports a bad score,
+            // then skip.
+            if !in_check && self.lists[here].loses_material(index) {
+                break;
+            }
             let undo = position.make_move(mv);
             let score = -self.quiescence::<Us::Them>(position, -beta, -alpha, ply + 1);
             position.unmake_move(mv, undo);

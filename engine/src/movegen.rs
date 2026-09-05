@@ -419,6 +419,12 @@ impl MoveList {
         }
     }
 
+    /// Whether the move picked into `index` is a capture the exchange says
+    /// loses material.
+    pub fn loses_material(&self, index: usize) -> bool {
+        (BAD_CAPTURE_RANK..KILLER_RANK).contains(&self.scores[index])
+    }
+
     /// Swaps the best move from `start` onwards into `start` and returns it.
     pub fn pick(&mut self, start: usize) -> Move {
         let scores = &self.scores[start..self.len];
