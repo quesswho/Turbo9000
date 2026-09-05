@@ -79,6 +79,7 @@ pub type Reporter = Arc<dyn Fn(Info) + Send + Sync>;
 #[derive(Clone)]
 pub struct Limits {
     depth: u32,
+    nodes: Option<u64>,
     deadline: Option<Instant>,
     stop: Option<Arc<AtomicBool>>,
     threads: usize,
@@ -89,6 +90,18 @@ impl Limits {
     pub const fn depth(depth: u32) -> Self {
         Self {
             depth,
+            nodes: None,
+            deadline: None,
+            stop: None,
+            threads: 1,
+            info: None,
+        }
+    }
+
+    pub const fn nodes(nodes: u64) -> Self {
+        Self {
+            depth: MAX_DEPTH,
+            nodes: Some(nodes),
             deadline: None,
             stop: None,
             threads: 1,
@@ -100,6 +113,7 @@ impl Limits {
     pub fn time(span: Duration) -> Self {
         Self {
             depth: MAX_DEPTH,
+            nodes: None,
             deadline: Some(Instant::now() + span),
             stop: None,
             threads: 1,
@@ -110,6 +124,7 @@ impl Limits {
     pub const fn infinite() -> Self {
         Self {
             depth: MAX_DEPTH,
+            nodes: None,
             deadline: None,
             stop: None,
             threads: 1,
@@ -302,6 +317,9 @@ fn run(
                     pv: &pv,
                 });
             }
+        }
+        if limits.nodes.is_some_and(|budget| searcher.nodes >= budget) {
+            break;
         }
     }
     Report {

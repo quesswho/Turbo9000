@@ -101,7 +101,7 @@ fn opening(rng: &mut Rng, list: &mut MoveList) -> Option<(Position, Vec<u64>)> {
 pub fn play(
     rng: &mut Rng,
     table: &TranspositionTable,
-    depth: u32,
+    nodes: u64,
     records: &mut Vec<[u8; RECORD]>,
 ) {
     table.clear();
@@ -110,7 +110,7 @@ pub fn play(
         return;
     };
 
-    let opened = search(&mut position, Limits::depth(depth), table, &history);
+    let opened = search(&mut position, Limits::nodes(nodes), table, &history);
     if opened.score.abs() > OPENING_BALANCE {
         return;
     }
@@ -134,7 +134,7 @@ pub fn play(
             break Outcome::Draw;
         }
 
-        let report = search(&mut position, Limits::depth(depth), table, &history);
+        let report = search(&mut position, Limits::nodes(nodes), table, &history);
         let Some(mv) = report.best else {
             break Outcome::Draw;
         };

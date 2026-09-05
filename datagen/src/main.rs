@@ -13,12 +13,14 @@ use datagen::rng::Rng;
 /// Per thread, so the table never has to be shared.
 const TABLE_MB: usize = 8;
 
+const NODES: u64 = 2_000;
+
 const PROGRESS: u64 = 100_000;
 
 fn main() {
     let mut arguments = std::env::args().skip(1);
     let (Some(output), Some(target)) = (arguments.next(), arguments.next()) else {
-        eprintln!("usage: datagen <output> <positions> [threads] [depth] [seed]");
+        eprintln!("usage: datagen <output> <positions> [threads] [nodes] [seed]");
         std::process::exit(2);
     };
     let target: u64 = target.parse().expect("positions is not a number");
@@ -26,9 +28,9 @@ fn main() {
         Some(text) => text.parse().expect("threads is not a number"),
         None => thread::available_parallelism().map_or(1, |count| count.get()),
     };
-    let depth: u32 = match arguments.next() {
-        Some(text) => text.parse().expect("depth is not a number"),
-        None => 6,
+    let nodes: u64 = match arguments.next() {
+        Some(text) => text.parse().expect("nodes is not a number"),
+        None => NODES,
     };
     let seed: u64 = match arguments.next() {
         Some(text) => text.parse().expect("seed is not a number"),
@@ -52,7 +54,7 @@ fn main() {
                 let mut records = Vec::new();
                 while written.load(Ordering::Relaxed) < target {
                     records.clear();
-                    play(&mut rng, &table, depth, &mut records);
+                    play(&mut rng, &table, nodes, &mut records);
                     if records.is_empty() {
                         continue;
                     }
