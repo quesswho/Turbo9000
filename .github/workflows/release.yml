@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        level: [x86-64-v1, x86-64-v2, x86-64-v3, x86-64-v4]
+        level: [x86-64, x86-64-v2, x86-64-v3, x86-64-v4]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -48,8 +48,9 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # x86-64-v2 is the widest level most testers can run; v1 is the fallback
-      # for older hardware, v3 needs AVX2 and v4 needs AVX-512.
+      # x86-64-v2 is the widest level most testers can run and x86-64 is the
+      # baseline fallback; v3 needs AVX2 and v4 needs AVX-512. The baseline is
+      # spelled x86-64, not x86-64-v1, which LLVM does not recognise.
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
