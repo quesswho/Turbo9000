@@ -37,17 +37,17 @@ const KING_BUCKETS: [usize; 32] = [
 
 const INPUT_BUCKETS: usize = get_num_buckets(&KING_BUCKETS);
 
-const DATASET: &str = "../../data/shuffled.data";
+const DATASET: &str = "../../data/30M2-shuffled.data";
 
-/// 30_001_300 positions / 16_384 per batch, so one superbatch is one epoch.
+/// 30_001_144 positions / 16_384 per batch, so one superbatch is one epoch.
 const BATCH_SIZE: usize = 16_384;
 const BATCHES_PER_SUPERBATCH: usize = 1831;
 const SUPERBATCHES: usize = 30;
 
-/// Weight on the game result rather than the search score. Generation 1 scores
-/// come out of a real search, so they carry much more than the generation 0
-/// material readout did and the result is worth less.
-const WDL_PROPORTION: f32 = 0.5;
+/// Weight on the game result rather than the search score. Generation 2 scores
+/// come out of net 2 searching with null move and eval pruning, so they carry
+/// more again than the generation 1 scores did and the result is worth less.
+const WDL_PROPORTION: f32 = 0.4;
 
 fn main() {
     let initial_lr = 0.001;
@@ -93,7 +93,7 @@ fn main() {
 
     // A run that dies partway can be picked up from its last checkpoint:
     //
-    //     RESUME_FROM=checkpoints/turbo9000-02-25 START_SUPERBATCH=26 cargo r -r --features cuda
+    //     RESUME_FROM=checkpoints/turbo9000-03-25 START_SUPERBATCH=26 cargo r -r --features cuda
     //
     // `start_superbatch` also offsets the LR scheduler, so the cosine tail is
     // the same as it would have been in one uninterrupted run.
@@ -105,7 +105,7 @@ fn main() {
     }
 
     let schedule = TrainingSchedule {
-        net_id: "turbo9000-02".to_string(),
+        net_id: "turbo9000-03".to_string(),
         eval_scale: 400.0,
         steps: TrainingSteps {
             batch_size: BATCH_SIZE,

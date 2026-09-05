@@ -1,5 +1,5 @@
 # Turbo9000
-A terrible chess engine written in Rust.
+A tolerable chess engine written in Rust.
 
 <img src="assets/mascot.png" alt="turbo mascot" width="300"/>
 
