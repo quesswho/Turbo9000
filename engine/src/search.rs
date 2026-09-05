@@ -31,6 +31,9 @@ const ASPIRATION_DELTA: Score = 25;
 /// Below this depth the previous score is too rough to narrow the window with.
 const ASPIRATION_MIN_DEPTH: u32 = 6;
 
+/// How many quiets a node remembers for the malus.
+const HISTORY_TRIED: usize = 32;
+
 const LMR_MIN_DEPTH: u32 = 3;
 const LMR_MIN_MOVES: usize = 3;
 
@@ -178,12 +181,12 @@ impl Searcher<'_> {
         }
     }
 
-    /// Quiet moves that cut anywhere in the tree are tried before the rest.
-    /// The bonus decays towards `HISTORY_MAX` so the table cannot run away.
-    fn reward_history(&mut self, mv: Move, side: usize, depth: u32) {
-        let bonus = ((depth * depth) as i32).min(HISTORY_MAX);
+    /// Quiet moves that cut anywhere in the tree are tried before the rest and
+    /// the ones that failed after the rest. The decay holds the entry inside
+    /// `+/- HISTORY_MAX` whichever way it is moved.
+    fn update_history(&mut self, mv: Move, side: usize, bonus: i32) {
         let entry = &mut self.history[side][mv.from() as usize][mv.to() as usize];
-        *entry += bonus - *entry * bonus / HISTORY_MAX;
+        *entry += bonus - *entry * bonus.abs() / HISTORY_MAX;
     }
 }
 
@@ -565,6 +568,11 @@ impl Searcher<'_> {
         // nodes cut off before one comes up.
         let mut checks: Option<CheckSquares> = None;
 
+        // The quiets played here, so a cutoff can hold the ones that failed
+        // against the one that worked.
+        let mut tried = [Move::NULL; HISTORY_TRIED];
+        let mut tried_len = 0;
+
         let alpha_orig = alpha;
         let mut best_move = None;
         // The list is not empty, so some move always beats this.
@@ -588,6 +596,11 @@ impl Searcher<'_> {
                         continue;
                     }
                 }
+            }
+
+            if quiet && tried_len < HISTORY_TRIED {
+                tried[tried_len] = mv;
+                tried_len += 1;
             }
 
             let undo = position.make_move(mv);
@@ -627,9 +640,16 @@ impl Searcher<'_> {
                 }
                 if alpha >= beta {
                     self.seen.pop();
+                    let bonus = ((depth * depth) as i32).min(HISTORY_MAX);
                     if quiet {
                         self.remember_killer(mv, here);
-                        self.reward_history(mv, position.side_to_move().index(), depth);
+                        self.update_history(mv, side, bonus);
+                    }
+                    for i in 0..tried_len {
+                        let failed = tried[i];
+                        if failed != mv {
+                            self.update_history(failed, side, -bonus);
+                        }
                     }
                     if !self.stopped {
                         self.table.store(hash, Some(mv), best_score, depth, ply, Flag::Lower);
