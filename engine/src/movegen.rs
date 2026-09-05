@@ -42,6 +42,41 @@ pub enum Stage {
 
 pub const NO_CHECK: BitBoard = !EMPTY;
 
+/// The squares a piece of ours has to land on to check their king.
+pub struct CheckSquares {
+    pawn: BitBoard,
+    knight: BitBoard,
+    bishop: BitBoard,
+    rook: BitBoard,
+}
+
+impl CheckSquares {
+    pub fn new<Us: Side>(position: &Position) -> Self {
+        let them = <Us::Them>::COLOR;
+        let square = position.king_square(them);
+        let occupied = position.occupied();
+        Self {
+            pawn: lookup::pawn_attacks::<Us::Them>(position.king(them)),
+            knight: lookup::KNIGHT_ATTACKS[square as usize],
+            bishop: lookup::bishop_attacks(square, occupied),
+            rook: lookup::rook_attacks(square, occupied),
+        }
+    }
+
+    /// Direct checks only, so a discovered check reads as no check at all.
+    pub fn given_by(&self, piece: Piece, to: Square) -> bool {
+        let squares = match piece {
+            Piece::Pawn => self.pawn,
+            Piece::Knight => self.knight,
+            Piece::Bishop => self.bishop,
+            Piece::Rook => self.rook,
+            Piece::Queen => self.bishop | self.rook,
+            Piece::King => EMPTY,
+        };
+        squares & bit(to) != EMPTY
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct CheckMasks {
     pub active: BitBoard,
