@@ -19,6 +19,12 @@ const MAX_DEPTH: u32 = 64;
 /// Number of nodes per budget check
 const CHECK_INTERVAL: u64 = 2048;
 
+/// How far past a soft node budget a single iteration may run before it is cut
+/// off. The soft budget is only read between iterations, and a table warmed by
+/// a long game makes each iteration so cheap that the depth climbs until one of
+/// them is unaffordable, so without this a search can run forever.
+const HARD_NODE_MULTIPLE: u64 = 16;
+
 /// How many plies of captures the quiescence search may follow.
 const QUIESCENCE_DEPTH: usize = 8;
 
@@ -158,6 +164,8 @@ struct Searcher<'a> {
     history: Vec<[[i32; 64]; 64]>,
     seen: Vec<u64>,
     nodes: u64,
+    /// Ceiling on the nodes of one search, from `HARD_NODE_MULTIPLE`.
+    hard_nodes: Option<u64>,
     deadline: Option<Instant>,
     stop: Arc<AtomicBool>,
     stopped: bool,
@@ -180,6 +188,11 @@ impl Searcher<'_> {
                     // One thread's clock is every thread's clock.
                     self.stop.store(true, Ordering::Relaxed);
                 }
+            }
+            // Only this thread's own budget, so a helper that runs long does
+            // not cut the search the main thread is still paying for.
+            if self.hard_nodes.is_some_and(|ceiling| self.nodes >= ceiling) {
+                self.stopped = true;
             }
             self.stopped |= self.stop.load(Ordering::Relaxed);
         }
@@ -280,6 +293,7 @@ fn run(
         history: vec![[[0; 64]; 64]; Color::COUNT],
         seen,
         nodes: 0,
+        hard_nodes: limits.nodes.map(|budget| budget.saturating_mul(HARD_NODE_MULTIPLE)),
         deadline: limits.deadline,
         stop,
         stopped: false,
