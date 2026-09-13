@@ -37,21 +37,13 @@ const KING_BUCKETS: [usize; 32] = [
 
 const INPUT_BUCKETS: usize = get_num_buckets(&KING_BUCKETS);
 
-const DATASET: &str = "../../data/gen3-100M-shuffled.data";
+const DATASET: &str = "../../data/gen4-shuffled.data";
 
-/// A superbatch is 1831 * 16_384 positions, which was one epoch of the 30M
-/// generation 2 set. Generation 3 is 100_000_579 positions, so the same 30
-/// superbatches are nine epochs over it rather than thirty over a set a third
-/// the size, for the same 900M positions seen.
 const BATCH_SIZE: usize = 16_384;
 const BATCHES_PER_SUPERBATCH: usize = 1831;
 const SUPERBATCHES: usize = 30;
 
-/// Weight on the game result rather than the search score. Generation 3 scores
-/// come out of a 2000 node budget rather than a fixed depth 6, so they are
-/// worth more again than generation 2's. The value is held where generation 2
-/// left it so this net measures the data and nothing else.
-const WDL_PROPORTION: f32 = 0.4;
+const WDL_PROPORTION: f32 = 0.2;
 
 fn main() {
     let initial_lr = 0.001;
@@ -108,8 +100,10 @@ fn main() {
         println!("Resumed from {path}, starting at superbatch {start_superbatch}");
     }
 
+    let net_id = std::env::var("NET_ID").unwrap_or_else(|_| "turbo9000".to_string());
+
     let schedule = TrainingSchedule {
-        net_id: "turbo9000-04".to_string(),
+        net_id,
         eval_scale: 400.0,
         steps: TrainingSteps {
             batch_size: BATCH_SIZE,
