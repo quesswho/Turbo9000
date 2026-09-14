@@ -163,6 +163,7 @@ struct Searcher<'a> {
     killers: Vec<[Move; 2]>,
     history: Vec<[[i32; 64]; 64]>,
     seen: Vec<u64>,
+    root: usize,
     nodes: u64,
     /// Ceiling on the nodes of one search, from `HARD_NODE_MULTIPLE`.
     hard_nodes: Option<u64>,
@@ -256,13 +257,21 @@ fn principal_variation(
     }
 }
 
-fn repeats(seen: &[u64], hash: u64, halfmove_clock: u8) -> bool {
+fn repeats(seen: &[u64], root: usize, hash: u64, halfmove_clock: u8) -> bool {
     let span = (halfmove_clock as usize).min(seen.len());
-    let window = &seen[seen.len() - span..];
-    let mut index = window.len();
-    while index >= 2 {
+    let start = seen.len() - span;
+    let mut played = 0;
+    let mut index = seen.len();
+    while index >= start + 2 {
         index -= 2;
-        if window[index] == hash {
+        if seen[index] != hash {
+            continue;
+        }
+        if index > root {
+            return true;
+        }
+        played += 1;
+        if played == 2 {
             return true;
         }
     }
@@ -292,6 +301,7 @@ fn run(
         killers: vec![[Move::NULL; 2]; limits.depth as usize + QUIESCENCE_DEPTH],
         history: vec![[[0; 64]; 64]; Color::COUNT],
         seen,
+        root: history.len(),
         nodes: 0,
         hard_nodes: limits.nodes.map(|budget| budget.saturating_mul(HARD_NODE_MULTIPLE)),
         deadline: limits.deadline,
@@ -500,7 +510,7 @@ impl Searcher<'_> {
         let halfmove_clock = position.halfmove_clock();
         let hash = position.hash();
         if halfmove_clock >= 100
-            || halfmove_clock >= 4 && repeats(&self.seen, hash, halfmove_clock)
+            || halfmove_clock >= 4 && repeats(&self.seen, self.root, hash, halfmove_clock)
         {
             return 0;
         }
