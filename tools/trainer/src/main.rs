@@ -37,11 +37,14 @@ const KING_BUCKETS: [usize; 32] = [
 
 const INPUT_BUCKETS: usize = get_num_buckets(&KING_BUCKETS);
 
-const DATASET: &str = "../../data/gen4-shuffled.data";
+const DATASET: &str = "../../data/gen5-shuffled.data";
 
+/// A superbatch is 1831 * 16_384 positions, about 30M. Generation 5 is 500M
+/// positions, so 150 superbatches are nine epochs over it, the same count the
+/// generation 4 net saw over its 100M.
 const BATCH_SIZE: usize = 16_384;
 const BATCHES_PER_SUPERBATCH: usize = 1831;
-const SUPERBATCHES: usize = 30;
+const SUPERBATCHES: usize = 150;
 
 const WDL_PROPORTION: f32 = 0.2;
 
@@ -117,7 +120,7 @@ fn main() {
     };
 
     let settings =
-        LocalSettings { threads: 4, test_set: None, output_directory: "checkpoints", batch_queue_size: 32 };
+        LocalSettings { threads: 6, test_set: None, output_directory: "checkpoints", batch_queue_size: 128 };
 
     let dataloader = DirectSequentialDataLoader::new(&[DATASET]);
 

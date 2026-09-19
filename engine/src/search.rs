@@ -257,7 +257,8 @@ fn principal_variation(
     }
 }
 
-fn repeats(seen: &[u64], root: usize, hash: u64, halfmove_clock: u8) -> bool {
+/// Count how many times has a hash been played
+fn repetitions(seen: &[u64], root: usize, hash: u64, halfmove_clock: u8) -> usize {
     let span = (halfmove_clock as usize).min(seen.len());
     let start = seen.len() - span;
     let mut played = 0;
@@ -268,14 +269,14 @@ fn repeats(seen: &[u64], root: usize, hash: u64, halfmove_clock: u8) -> bool {
             continue;
         }
         if index > root {
-            return true;
+            return 2;
         }
         played += 1;
         if played == 2 {
-            return true;
+            return 2;
         }
     }
-    false
+    played
 }
 
 /// Uniform draw in `0..bound`, cheap and good enough for the root shuffle.
@@ -509,9 +510,12 @@ impl Searcher<'_> {
         // A draw at the horizon is missed, the node above it catches the line.
         let halfmove_clock = position.halfmove_clock();
         let hash = position.hash();
-        if halfmove_clock >= 100
-            || halfmove_clock >= 4 && repeats(&self.seen, self.root, hash, halfmove_clock)
-        {
+        let played = if halfmove_clock >= 4 {
+            repetitions(&self.seen, self.root, hash, halfmove_clock)
+        } else {
+            0
+        };
+        if halfmove_clock >= 100 || played >= 2 {
             return 0;
         }
 
@@ -519,9 +523,12 @@ impl Searcher<'_> {
             return 0;
         }
 
+        // If a position has already been played we should evaluate it again
+        let transposable = played == 0;
+
         let tt_entry = self.table.probe(hash);
         if let Some(entry) = tt_entry {
-            if entry.depth() >= depth {
+            if transposable && entry.depth() >= depth {
                 let score = entry.score(ply);
                 match entry.flag() {
                     Flag::Exact => return score,
@@ -693,7 +700,7 @@ impl Searcher<'_> {
                             self.update_history(failed, side, -bonus);
                         }
                     }
-                    if !self.stopped {
+                    if !self.stopped && transposable {
                         self.table.store(hash, Some(mv), best_score, depth, ply, Flag::Lower);
                     }
                     return best_score;
@@ -702,7 +709,7 @@ impl Searcher<'_> {
         }
         self.seen.pop();
 
-        if !self.stopped {
+        if !self.stopped && transposable {
             let flag = if alpha > alpha_orig { Flag::Exact } else { Flag::Upper };
             self.table.store(hash, best_move, best_score, depth, ply, flag);
         }
