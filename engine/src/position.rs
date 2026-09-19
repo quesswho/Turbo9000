@@ -2,7 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::moves::Move;
-use crate::nnue::Accumulator;
+use crate::nnue::{Accumulator, Delta};
 use crate::zobrist;
 
 /// One bit per square, indexed little-endian rank-file: bit 0 is A1, bit 63 is H8.
@@ -264,7 +264,8 @@ pub struct Position {
     en_passant: Square,
     halfmove_clock: u8,
     hash: u64,
-    accumulator: Accumulator,
+    accumulators: Vec<Accumulator>,
+    ply: usize,
 }
 
 /// Undo state returned by `make_move` and passed back to
@@ -276,6 +277,22 @@ pub struct Undo {
     pub en_passant: Square,
     pub halfmove_clock: u8,
     pub hash: u64,
+}
+
+/// Builds one side's values from the board.
+fn build(
+    accumulator: &mut Accumulator,
+    perspective: Color,
+    king: Square,
+    mut occupied: BitBoard,
+    mailbox: &[Option<ColoredPiece>; 64],
+) {
+    accumulator.reset(perspective, king);
+    while occupied != EMPTY {
+        let square = pop_square(&mut occupied);
+        let colored = mailbox[square as usize].expect("occupied square without a piece");
+        accumulator.add_for(perspective, colored.piece(), colored.color(), square);
+    }
 }
 
 impl Position {
@@ -290,7 +307,8 @@ impl Position {
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
             hash: 0,
-            accumulator: Accumulator::empty(),
+            accumulators: vec![Accumulator::empty()],
+            ply: 0,
         }
     }
 
@@ -332,7 +350,8 @@ impl Position {
             en_passant: NO_EN_PASSANT,
             halfmove_clock: 0,
             hash: 0,
-            accumulator: Accumulator::empty(),
+            accumulators: vec![Accumulator::empty()],
+            ply: 0,
         };
         position.rebuild_mailbox();
         position.hash = position.compute_hash();
@@ -510,39 +529,52 @@ impl Position {
         self.hash
     }
 
-    pub const fn accumulator(&self) -> &Accumulator {
-        &self.accumulator
+    pub fn accumulator(&self) -> &Accumulator {
+        &self.accumulators[self.ply]
     }
 
     /// Needed after the boards are filled directly or piece by piece, since a
-    /// side's bucket is only settled once its king is on the board.
+    /// side's bucket is only settled once its king is on the board, and since
+    /// the piece by piece mutators leave the accumulator behind.
     pub fn refresh_accumulator(&mut self) {
-        for color in Color::ALL {
-            self.refresh_perspective(color);
+        self.ply = 0;
+        for perspective in Color::ALL {
+            let king = self.king_square(perspective);
+            build(
+                &mut self.accumulators[0],
+                perspective,
+                king,
+                self.occupied,
+                &self.mailbox,
+            );
         }
     }
 
-    /// A side sees the board through the bucket its own king stands in, so all
-    /// of its features have to be recomputed once that bucket changes.
-    fn refresh_perspective(&mut self, perspective: Color) {
-        let king = self.king_square(perspective);
-        self.accumulator.reset(perspective, king);
-
-        let mut occupied = self.occupied;
-        while occupied != EMPTY {
-            let square = pop_square(&mut occupied);
-            let colored = self.mailbox[square as usize].expect("occupied square without a piece");
-            self.accumulator
-                .add_for(perspective, colored.piece(), colored.color(), square);
+    /// Writes the values the move just played leaves behind into the next
+    /// entry, so the one it was played from survives for `unmake_move`.
+    fn push_accumulator(&mut self, delta: &Delta) {
+        if self.ply + 1 == self.accumulators.len() {
+            self.accumulators.push(Accumulator::empty());
         }
-    }
+        let kings = [
+            self.king_square(Color::ALL[0]),
+            self.king_square(Color::ALL[1]),
+        ];
+        let occupied = self.occupied;
+        let mailbox = &self.mailbox;
+        let (played, rest) = self.accumulators.split_at_mut(self.ply + 1);
+        let previous = &played[self.ply];
+        let next = &mut rest[0];
 
-    /// Called wherever a king moved, which is the only way a side stops seeing
-    /// the board the way its values were accumulated.
-    fn sync_perspective(&mut self, perspective: Color) {
-        if !self.accumulator.sees(perspective, self.king_square(perspective)) {
-            self.refresh_perspective(perspective);
+        for perspective in Color::ALL {
+            let king = kings[perspective.index()];
+            if previous.sees(perspective, king) {
+                next.apply(previous, perspective, delta);
+            } else {
+                build(next, perspective, king, occupied, mailbox);
+            }
         }
+        self.ply += 1;
     }
 
     pub fn compute_hash(&self) -> u64 {
@@ -592,7 +624,6 @@ impl Position {
         self.occupied |= mask;
         self.mailbox[square as usize] = Some(colored);
         self.hash ^= zobrist::piece_key(colored, square);
-        self.accumulator.add(piece, color, square);
     }
 
     /// The piece and color must match what stands on the square.
@@ -604,7 +635,6 @@ impl Position {
         self.occupied &= mask;
         self.mailbox[square as usize] = None;
         self.hash ^= zobrist::piece_key(ColoredPiece::new(piece, color), square);
-        self.accumulator.remove(piece, color, square);
     }
 
     pub fn move_piece(&mut self, from: Square, to: Square, piece: Piece, color: Color) {
@@ -618,7 +648,6 @@ impl Position {
         self.mailbox[from as usize] = None;
         self.mailbox[to as usize] = Some(colored);
         self.hash ^= zobrist::piece_key(colored, from) ^ zobrist::piece_key(colored, to);
-        self.accumulator.move_piece(piece, color, from, to);
     }
 
     /// Applies a move without checking legality, returning what it destroyed.
@@ -638,6 +667,7 @@ impl Position {
             self.mailbox[to as usize]
         };
         let undo = self.undo(captured);
+        let mut delta = Delta::new();
 
         if let Some(captured) = captured {
             let victim = if mv.is_en_passant() {
@@ -646,16 +676,26 @@ impl Position {
                 to
             };
             self.remove_piece(victim, captured.piece(), them);
+            delta.remove(captured, victim);
         }
 
         if mv.is_promotion() {
+            let promoted = ColoredPiece::new(mv.promoted_piece(), us);
             self.remove_piece(from, Piece::Pawn, us);
             self.put_piece(to, mv.promoted_piece(), us);
+            delta.remove(ColoredPiece::new(Piece::Pawn, us), from);
+            delta.add(promoted, to);
         } else {
+            let colored = ColoredPiece::new(moving, us);
             self.move_piece(from, to, moving, us);
+            delta.remove(colored, from);
+            delta.add(colored, to);
             if mv.is_castle() {
+                let rook = ColoredPiece::new(Piece::Rook, us);
                 let (rook_from, rook_to) = castle_rook(from, mv.is_king_castle());
                 self.move_piece(rook_from, rook_to, Piece::Rook, us);
+                delta.remove(rook, rook_from);
+                delta.add(rook, rook_to);
             }
         }
 
@@ -682,9 +722,7 @@ impl Position {
         self.side_to_move = them;
         self.hash ^= zobrist::side_key();
 
-        if moving == Piece::King {
-            self.sync_perspective(us);
-        }
+        self.push_accumulator(&delta);
 
         undo
     }
@@ -721,10 +759,7 @@ impl Position {
         }
 
         self.restore(undo);
-
-        if self.mailbox[from as usize] == Some(ColoredPiece::new(Piece::King, us)) {
-            self.sync_perspective(us);
-        }
+        self.ply -= 1;
     }
 
     /// Passes a move
