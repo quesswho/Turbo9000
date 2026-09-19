@@ -120,7 +120,7 @@ fn main() {
     };
 
     let settings =
-        LocalSettings { threads: 4, test_set: None, output_directory: "checkpoints", batch_queue_size: 32 };
+        LocalSettings { threads: 6, test_set: None, output_directory: "checkpoints", batch_queue_size: 128 };
 
     let dataloader = DirectSequentialDataLoader::new(&[DATASET]);
 
