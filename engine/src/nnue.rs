@@ -41,7 +41,9 @@ struct Network {
     output_bias: [i16; OUTPUT_BUCKETS],
 }
 
-static NET: Network = unsafe { mem::transmute(*include_bytes!("net.bin")) };
+const WEIGHTS: Network = unsafe { mem::transmute(*include_bytes!("net.bin")) };
+
+static NET: Network = WEIGHTS;
 
 /// How one side sees the board: the weights of its king bucket, and the
 /// transform that puts its own side at the bottom and its king on files a to d.
@@ -84,6 +86,21 @@ fn activate(value: i16, weight: i16) -> i32 {
     let clipped = value.clamp(0, QA as i16);
     i32::from(clipped * weight) * i32::from(clipped)
 }
+
+const OUTPUT_WEIGHT_BOUND: u16 = (i16::MAX / QA as i16) as u16;
+
+const _: () = {
+    let weights: [i16; OUTPUT_BUCKETS * Color::COUNT * HIDDEN] =
+        unsafe { mem::transmute(WEIGHTS.output_weights) };
+    let mut index = 0;
+    while index < weights.len() {
+        assert!(
+            weights[index].unsigned_abs() <= OUTPUT_WEIGHT_BOUND,
+            "an output weight overflows the i16 multiply in activate"
+        );
+        index += 1;
+    }
+};
 
 /// The features one move turns on and off. A castle moves two pieces and a
 /// promotion capture destroys two, so two of each is as many as a move needs.
