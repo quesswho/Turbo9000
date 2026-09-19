@@ -42,3 +42,28 @@ fn a_threefold_repetition_is_scored_as_a_draw() {
 fn a_twofold_repetition_is_not_scored_as_a_draw() {
     assert!(shuffled(&["h8h7", "b1a1", "h7h8"]) < -500, "claimed a draw it cannot force");
 }
+
+/// Black is a piece up and checks with `Nc2+` twice. The position the check
+/// leaves has one key and two values: the first time white is simply lost, the
+/// third time `Ke2` repeats and draws. A search of the first visit fills the
+/// table under that key, and cutting on it at the third visit hides the
+/// threefold behind a won score and throws the game away.
+#[test]
+fn a_score_from_an_earlier_visit_does_not_hide_a_threefold() {
+    let mut position: Position =
+        "2kr4/1pp3pp/p7/4N3/P4p2/1PN1b3/2n1K1PP/3R4 b - - 0 25".parse().expect("bad fen");
+    let mut history = Vec::new();
+    let table = TranspositionTable::new(1);
+    for text in ["c2d4", "e2e1", "d4c2", "e1e2", "c2d4", "e2e1"] {
+        history.push(position.hash());
+        let mv = find_move(&position, text).expect("illegal setup move");
+        position.make_move(mv);
+        if text == "d4c2" {
+            search(&mut position, Limits::depth(10), &table, &history);
+        }
+    }
+
+    let report = search(&mut position, Limits::depth(6), &table, &history);
+    assert_ne!(report.best.expect("no move").to_string(), "d4c2", "walked into the threefold");
+    assert!(report.score > 500, "gave up the piece it is up");
+}
