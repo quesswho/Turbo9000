@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::position::{Color, Piece, Position, Square, file_of};
+use crate::position::{Color, ColoredPiece, Piece, Position, Square, file_of};
 use crate::search::Score;
 
 pub const HIDDEN: usize = 512;
@@ -102,6 +102,59 @@ const _: () = {
     }
 };
 
+/// The features one move turns on and off. A castle moves two pieces and a
+/// promotion capture destroys two, so two of each is as many as a move needs.
+#[derive(Clone, Copy)]
+pub struct Delta {
+    added: [(ColoredPiece, Square); 2],
+    removed: [(ColoredPiece, Square); 2],
+    added_len: usize,
+    removed_len: usize,
+}
+
+impl Delta {
+    pub const fn new() -> Self {
+        // The slots past each length are never read.
+        const UNUSED: (ColoredPiece, Square) = (ColoredPiece::WhitePawn, 0);
+        Self {
+            added: [UNUSED; 2],
+            removed: [UNUSED; 2],
+            added_len: 0,
+            removed_len: 0,
+        }
+    }
+
+    pub fn add(&mut self, colored: ColoredPiece, square: Square) {
+        self.added[self.added_len] = (colored, square);
+        self.added_len += 1;
+    }
+
+    pub fn remove(&mut self, colored: ColoredPiece, square: Square) {
+        self.removed[self.removed_len] = (colored, square);
+        self.removed_len += 1;
+    }
+}
+
+/// One pass over the row, so a capture or a castle costs the same loads and
+/// stores as a quiet move.
+fn combine<const ADDED: usize, const REMOVED: usize>(
+    values: &mut [i16; HIDDEN],
+    previous: &[i16; HIDDEN],
+    added: [&[i16; HIDDEN]; ADDED],
+    removed: [&[i16; HIDDEN]; REMOVED],
+) {
+    for (index, value) in values.iter_mut().enumerate() {
+        let mut sum = previous[index];
+        for weights in added {
+            sum += weights[index];
+        }
+        for weights in removed {
+            sum -= weights[index];
+        }
+        *value = sum;
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Accumulator {
     values: [[i16; HIDDEN]; Color::COUNT],
@@ -119,25 +172,34 @@ impl Accumulator {
         }
     }
 
-    pub fn add(&mut self, piece: Piece, color: Color, square: Square) {
-        self.update::<true>(piece, color, square);
-    }
+    /// Writes what `previous` becomes once `delta` is applied, leaving
+    /// `previous` untouched so a move is taken back by reading it again.
+    pub fn apply(&mut self, previous: &Self, perspective: Color, delta: &Delta) {
+        let index = perspective.index();
+        let view = previous.views[index];
+        self.views[index] = view;
 
-    pub fn remove(&mut self, piece: Piece, color: Color, square: Square) {
-        self.update::<false>(piece, color, square);
-    }
-
-    /// A piece that stays on the board in one pass, since both of its features
-    /// share the accumulator loads and stores.
-    pub fn move_piece(&mut self, piece: Piece, color: Color, from: Square, to: Square) {
-        for perspective in Color::ALL {
-            let view = self.views[perspective.index()];
-            let sub = &NET.feature_weights[feature(view, perspective, color, piece, from)];
-            let add = &NET.feature_weights[feature(view, perspective, color, piece, to)];
-            let values = &mut self.values[perspective.index()];
-            for ((value, &sub), &add) in values.iter_mut().zip(sub).zip(add) {
-                *value += add - sub;
+        let row = |(colored, square): (ColoredPiece, Square)| {
+            let feature = feature(view, perspective, colored.color(), colored.piece(), square);
+            &NET.feature_weights[feature]
+        };
+        let previous = &previous.values[index];
+        let values = &mut self.values[index];
+        match (
+            &delta.added[..delta.added_len],
+            &delta.removed[..delta.removed_len],
+        ) {
+            ([to], [from]) => combine(values, previous, [row(*to)], [row(*from)]),
+            ([to], [victim, from]) => {
+                combine(values, previous, [row(*to)], [row(*victim), row(*from)])
             }
+            ([to, rook_to], [from, rook_from]) => combine(
+                values,
+                previous,
+                [row(*to), row(*rook_to)],
+                [row(*from), row(*rook_from)],
+            ),
+            _ => unreachable!("a move turns at most two features on and two off"),
         }
     }
 
@@ -155,27 +217,11 @@ impl Accumulator {
     }
 
     pub fn add_for(&mut self, perspective: Color, piece: Piece, color: Color, square: Square) {
-        self.accumulate::<true>(perspective, piece, color, square);
-    }
-
-    fn update<const ADD: bool>(&mut self, piece: Piece, color: Color, square: Square) {
-        for perspective in Color::ALL {
-            self.accumulate::<ADD>(perspective, piece, color, square);
-        }
-    }
-
-    fn accumulate<const ADD: bool>(
-        &mut self,
-        perspective: Color,
-        piece: Piece,
-        color: Color,
-        square: Square,
-    ) {
         let view = self.views[perspective.index()];
         let weights = &NET.feature_weights[feature(view, perspective, color, piece, square)];
         let values = &mut self.values[perspective.index()];
         for (value, &weight) in values.iter_mut().zip(weights) {
-            *value = if ADD { *value + weight } else { *value - weight };
+            *value += weight;
         }
     }
 }
